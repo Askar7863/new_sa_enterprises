@@ -1,11 +1,11 @@
 """
-Task: Create a simple calculator function that can add, subtract, multiply, and divide two numbers
-Generated: 2025-11-11 13:15:26
+Task: Create a Python function to calculate factorial of a number
+Generated: 2025-11-11 14:43:32
 """
 
 def main():
-    """Main function for: Create a simple calculator function that can add, subtract, multiply, and divide two numbers"""
-    print("TODO: Implement Create a simple calculator function that can add, subtract, multiply, and divide two numbers")
+    """Main function for: Create a Python function to calculate factorial of a number"""
+    print("TODO: Implement Create a Python function to calculate factorial of a number")
     # Add your implementation here
     pass
 
