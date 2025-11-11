@@ -1,62 +1,88 @@
-from flask import Flask, render_template, request, jsonify
-from werkzeug.security import generate_password_hash, check_password_hash
-import os
+import numpy as np
 
-app = Flask(__name__)
+def calculate_3d_array_sum(arr):
+    """
+    Calculates the sum of all elements in a 3D array using NumPy.
 
-# In a real application, users would be stored in a database.
-# For demonstration, we'll use a simple dictionary.
-# Passwords here are hashed for security even in this mock setup.
-mock_users = {
-    "user@example.com": {
-        "name": "Test User",
-        "password_hash": generate_password_hash("password123"),
-        "email": "user@example.com"
-    },
-    "admin@example.com": {
-        "name": "Admin",
-        "password_hash": generate_password_hash("adminpass"),
-        "email": "admin@example.com"
-    }
-}
+    Args:
+        arr: A list of lists of lists representing a 3D array, or a numpy array.
 
-@app.route('/')
-def index():
-    """Serves the login page."""
-    return render_template('login.html')
+    Returns:
+        The sum of all elements in the array.
 
-@app.route('/api/login', methods=['POST'])
-def login():
-    """Handles login requests."""
+    Raises:
+        ValueError: If the input cannot be converted to a NumPy array,
+                    or if it is not 3-dimensional.
+    """
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"message": "Invalid JSON"}), 400
+        np_array = np.array(arr)
 
-        name = data.get('name')
-        email = data.get('email')
-        password = data.get('password')
+        # Check if the array is actually 3-dimensional
+        if np_array.ndim != 3:
+            raise ValueError(f"Input array must be 3-dimensional, but got {np_array.ndim} dimensions.")
 
-        if not all([name, email, password]):
-            return jsonify({"message": "Missing name, email, or password"}), 400
-
-        # In a real app, 'name' might be used for registration or just display after login.
-        # For login, email is the primary identifier.
-        user = mock_users.get(email)
-
-        if user and check_password_hash(user['password_hash'], password):
-            # Successfully logged in. In a real app, a session token would be issued here.
-            return jsonify({"message": "Login successful!", "user": {"name": user['name'], "email": user['email']}}), 200
-        else:
-            # User not found or password incorrect
-            return jsonify({"message": "Invalid email or password"}), 401
-
+        total_sum = np.sum(np_array)
+        return total_sum
+    except TypeError as e:
+        raise ValueError(f"Error converting input to a NumPy array. Ensure it is array-like: {e}")
     except Exception as e:
-        # Log the exception for debugging in a real application
-        app.logger.error(f"Login error: {e}")
-        return jsonify({"message": "An internal server error occurred"}), 500
+        # Catch any other potential errors during sum calculation or array processing
+        raise ValueError(f"An unexpected error occurred during sum calculation: {e}")
 
-if __name__ == '__main__':
-    # Use a secure secret key in production
-    app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_super_secret_key_for_dev_only')
-    app.run(debug=True, port=5000)
+
+if __name__ == "__main__":
+    print("--- Demonstrating 3D Array Sum Calculation ---")
+
+    # Example 1: A valid 3D array
+    my_3d_array = [
+        [
+            [1, 2, 3],
+            [4, 5, 6]
+        ],
+        [
+            [7, 8, 9],
+            [10, 11, 12]
+        ],
+        [
+            [13, 14, 15],
+            [16, 17, 18]
+        ]
+    ]
+
+    print(f"\nInput 3D array (list representation):\n{my_3d_array}")
+    print(f"NumPy representation:\n{np.array(my_3d_array)}")
+    try:
+        sum_result = calculate_3d_array_sum(my_3d_array)
+        print(f"The sum of the 3D array is: {sum_result}") # Expected: 171
+    except ValueError as e:
+        print(f"Error: {e}")
+
+    # Example 2: Testing with an already existing NumPy 3D array
+    numpy_3d_array = np.arange(1, 28).reshape((3, 3, 3)) # 3x3x3 array from 1 to 27
+    print(f"\nInput NumPy 3D array:\n{numpy_3d_array}")
+    try:
+        sum_result_numpy = calculate_3d_array_sum(numpy_3d_array)
+        print(f"The sum of the NumPy 3D array is: {sum_result_numpy}") # Expected: 378
+    except ValueError as e:
+        print(f"Error: {e}")
+
+    # Example 3: Testing with an invalid array (2D instead of 3D)
+    invalid_2d_array = [
+        [10, 20],
+        [30, 40]
+    ]
+    print(f"\nInput invalid 2D array:\n{invalid_2d_array}")
+    try:
+        sum_result_2d = calculate_3d_array_sum(invalid_2d_array)
+        print(f"The sum of the 2D array is: {sum_result_2d}")
+    except ValueError as e:
+        print(f"Error: {e}")
+
+    # Example 4: Testing with an input that is not array-like (string)
+    invalid_non_array = "this is not an array"
+    print(f"\nInput invalid non-array (string): '{invalid_non_array}'")
+    try:
+        sum_result_str = calculate_3d_array_sum(invalid_non_array)
+        print(f"The sum of the string input is: {sum_result_str}")
+    except ValueError as e:
+        print(f"Error: {e}")
