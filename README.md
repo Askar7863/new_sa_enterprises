@@ -1,9 +1,9 @@
-# Create a simple calculator function that can add, subtract, multiply, and divide two numbers
+# Create a Python function to calculate factorial of a number
 
-**Generated:** 2025-11-11 13:15:26
+**Generated:** 2025-11-11 14:43:32
 
 ## Description
-This code was auto-generated for the task: "Create a simple calculator function that can add, subtract, multiply, and divide two numbers"
+This code was auto-generated for the task: "Create a Python function to calculate factorial of a number"
 
 ## TODO
 - Implement the main functionality
