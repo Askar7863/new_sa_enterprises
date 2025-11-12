@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="container text-center mt-5">
+        <h1 class="display-1 text-danger">403</h1>
+        <h2 class="mb-4">Forbidden</h2>
+        <p class="lead">You don't have permission to access this resource.</p>
+        <p class="mb-5">Please log in with appropriate credentials or contact support if you believe this is an error.</p>
+        <a href="{{ url_for('index') }}" class="btn btn-primary btn-lg">Go to Homepage</a>
+    </div>
+{% endblock %}

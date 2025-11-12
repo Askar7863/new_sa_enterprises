@@ -1,0 +1,68 @@
+/* Custom styles for E-Shop */
+
+body {
+    font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    min-height: 100vh;
+    position: relative;
+    padding-bottom: 80px; /* Height of the footer */
+}
+
+.navbar-brand {
+    font-weight: bold;
+    font-size: 1.5rem;
+}
+
+.card-img-top {
+    height: 200px; /* Fixed height for product images */
+    object-fit: cover;
+    width: 100%;
+}
+
+.card {
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15) !important;
+}
+
+.jumbotron {
+    background-color: #f8f9fa;
+    padding: 3rem;
+    border-radius: .5rem;
+}
+
+/* Form styling for better readability */
+.form-label {
+    font-weight: 500;
+}
+
+/* Footer adjustments */
+.footer {
+    position: absolute;
+    bottom: 0;
+    width: 100%;
+    /* Set the fixed height of the footer here */
+    height: 60px;
+    line-height: 60px; /* Vertically center the text there */
+}
+
+/* Specific badge colors for order status */
+.badge.bg-pending {
+    background-color: #ffc107 !important; /* warning */
+    color: #212529; /* dark text */
+}
+.badge.bg-processing {
+    background-color: #0dcaf0 !important; /* info */
+}
+.badge.bg-shipped {
+    background-color: #0d6efd !important; /* primary */
+}
+.badge.bg-delivered {
+    background-color: #198754 !important; /* success */
+}
+.badge.bg-cancelled {
+    background-color: #dc3545 !important; /* danger */
+}
+
