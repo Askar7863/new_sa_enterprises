@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="jumbotron text-center bg-light p-5 rounded shadow-sm mb-5">
+        <h1 class="display-4">Welcome to E-Shop!</h1>
+        <p class="lead">Your one-stop shop for amazing products.</p>
+        <hr class="my-4">
+        <p>Explore our wide range of electronics, gadgets, and more.</p>
+        <a class="btn btn-primary btn-lg" href="{{ url_for('products') }}" role="button">Shop Now!</a>
+    </div>
+
+    <h2 class="text-center mb-4">Latest Products</h2>
+    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-4 g-4">
+        {% for product in products %}
+        <div class="col">
+            <div class="card h-100 shadow-sm">
+                <img src="{{ product.image_url }}" class="card-img-top" alt="{{ product.name }}">
+                <div class="card-body d-flex flex-column">
+                    <h5 class="card-title">{{ product.name }}</h5>
+                    <p class="card-text text-muted flex-grow-1">{{ product.description | truncate(70) }}</p>
+                    <p class="card-text fw-bold fs-5">${{ "%.2f" | format(product.price) }}</p>
+                    <a href="{{ url_for('product_detail', product_id=product.id) }}" class="btn btn-outline-primary mt-auto">View Details</a>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <p class="text-center col-12">No products available yet. Check back soon!</p>
+        {% endfor %}
+    </div>
+{% endblock %}
