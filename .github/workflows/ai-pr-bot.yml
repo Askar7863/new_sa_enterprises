@@ -34,16 +34,18 @@ jobs:
         shell: bash
         run: |
           echo "Reading issue description..."
-          ISSUE_BODY="${{ github.event.issue.body }}"
-          echo "Issue Content: $ISSUE_BODY"
 
-          # Create a fun test file (from your issue example)
+          # Encode the issue body to avoid shell parsing errors
+          ISSUE_BODY=$(echo "${{ github.event.issue.body }}" | base64)
+
+          # Decode safely and write to file
+          echo "Decoded Issue Content:" > ai_generated_output.txt
+          echo "$ISSUE_BODY" | base64 --decode >> ai_generated_output.txt
+
+          # Create test file
           echo "Hey there 👋 This file was created automatically by the AI PR Bot!" > HELLO_AI.txt
 
-          # Save issue description for reference
-          echo "$ISSUE_BODY" > ai_generated_output.txt
-
-          # Log the update
+          # Log update timestamp
           echo "Auto-updated at $(date)" >> AUTO_CHANGE_LOG.txt
 
       - name: Commit changes
