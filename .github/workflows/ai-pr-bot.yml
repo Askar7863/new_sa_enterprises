@@ -1,86 +1,41 @@
-name: AI PR Bot Automation
+name: AI Issue Processor
 
 on:
   issues:
     types: [opened, edited]
 
 jobs:
-  ai_pr_bot:
+  collect_and_send:
     runs-on: ubuntu-latest
 
     permissions:
-      id-token: write       # required for OIDC authentication
-      contents: write       # required for committing changes
-      pull-requests: write  # required for opening PRs
       issues: read
+      contents: read
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: Authenticate with Google Cloud via OIDC
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: "projects/314154954531/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
-          service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
-          token_format: access_token
-
-      - name: Set up Git
+      - name: Prepare issue payload
+        id: payload
         run: |
-          git config --global user.name "AI Issue Bot"
-          git config --global user.email "ai-issue-bot@users.noreply.github.com"
+          echo "Creating JSON payload"
+          jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg issue_number "${{ github.event.issue.number }}" \
+            --arg title "${{ github.event.issue.title }}" \
+            --arg body "${{ github.event.issue.body }}" \
+            '{repository:$repo, issue_number:$issue_number, title:$title, body:$body}' \
+            > issue_payload.json
 
-      - name: Generate AI-based code changes
-        shell: bash
+      - name: Send payload to your AI handler
+        env:
+          AI_SERVICE_URL: ${{ secrets.AI_HANDLER_URL }}   # your API endpoint
+          AI_SERVICE_KEY: ${{ secrets.AI_HANDLER_KEY }}   # auth token for your service
         run: |
-          echo "Reading issue description..."
-
-          # Encode issue body to handle multi-line & emojis safely
-          ISSUE_BODY=$(echo "${{ github.event.issue.body }}" | base64)
-
-          # Decode safely and write to a file
-          echo "Decoded Issue Content:" > ai_generated_output.txt
-          echo "$ISSUE_BODY" | base64 --decode >> ai_generated_output.txt
-
-          # Create sample AI-generated file
-          echo "Hey there 👋 This file was created automatically by the AI PR Bot!" > HELLO_AI.txt
-
-          # Log timestamp
-          echo "Auto-updated at $(date)" >> AUTO_CHANGE_LOG.txt
-
-      - name: Commit & push changes (only if any)
-        id: commit_changes
-        run: |
-          set -e
-          BRANCH="auto-pr-${{ github.event.issue.number }}"
-          # Create or switch to branch
-          git checkout -b "$BRANCH" || git checkout "$BRANCH"
-
-          git add .
-
-          # If there are no staged changes, report changed=false
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No changes to commit"
-          else
-            git commit -m "Auto changes for Issue #${{ github.event.issue.number }}"
-            git push origin "$BRANCH" --force
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create Pull Request
-        if: steps.commit_changes.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: auto-pr-${{ github.event.issue.number }}
-          base: ${{ github.event.repository.default_branch }}   # use the repo default branch dynamically
-          title: "Automated PR for Issue #${{ github.event.issue.number }}"
-          body: |
-            This PR was automatically generated based on Issue #${{ github.event.issue.number }}.
-            Issue content:
-            ```
-            ${{ github.event.issue.body }}
-            ```
+          curl -X POST "$AI_SERVICE_URL" \
+               -H "Authorization: Bearer $AI_SERVICE_KEY" \
+               -H "Content-Type: application/json" \
+               --data-binary @issue_payload.json
