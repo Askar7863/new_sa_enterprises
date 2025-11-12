@@ -1,62 +1,67 @@
-from flask import Flask, render_template, request, jsonify
-from werkzeug.security import generate_password_hash, check_password_hash
-import os
+import sys
 
-app = Flask(__name__)
+def calculate_factorial(n: int) -> int:
+    """
+    Calculates the factorial of a non-negative integer n.
+    Factorial is defined as the product of all positive integers less than or equal to n.
+    The factorial of 0 is 1.
 
-# In a real application, users would be stored in a database.
-# For demonstration, we'll use a simple dictionary.
-# Passwords here are hashed for security even in this mock setup.
-mock_users = {
-    "user@example.com": {
-        "name": "Test User",
-        "password_hash": generate_password_hash("password123"),
-        "email": "user@example.com"
-    },
-    "admin@example.com": {
-        "name": "Admin",
-        "password_hash": generate_password_hash("adminpass"),
-        "email": "admin@example.com"
-    }
-}
+    Args:
+        n (int): The non-negative integer for which to calculate the factorial.
 
-@app.route('/')
-def index():
-    """Serves the login page."""
-    return render_template('login.html')
+    Returns:
+        int: The factorial of n.
 
-@app.route('/api/login', methods=['POST'])
-def login():
-    """Handles login requests."""
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"message": "Invalid JSON"}), 400
+    Raises:
+        ValueError: If n is a negative integer.
+        TypeError: If n is not an integer.
+    """
+    if not isinstance(n, int):
+        raise TypeError("Input must be an integer.")
+    if n < 0:
+        raise ValueError("Factorial is not defined for negative numbers.")
+    if n == 0:
+        return 1
 
-        name = data.get('name')
-        email = data.get('email')
-        password = data.get('password')
+    result = 1
+    for i in range(1, n + 1):
+        result *= i
+    return result
 
-        if not all([name, email, password]):
-            return jsonify({"message": "Missing name, email, or password"}), 400
+def main():
+    """
+    Main function to get two numbers from the user and calculate their factorials.
+    """
+    print("\n--- Factorial Calculator for Two Numbers ---")
 
-        # In a real app, 'name' might be used for registration or just display after login.
-        # For login, email is the primary identifier.
-        user = mock_users.get(email)
+    numbers = []
+    for i in range(1, 3):
+        while True:
+            try:
+                input_str = input(f"Enter non-negative integer number {i}: ")
+                num = int(input_str)
+                if num < 0:
+                    print("Error: Please enter a non-negative integer.")
+                else:
+                    numbers.append(num)
+                    break
+            except ValueError:
+                print(f"Error: Invalid input '{input_str}'. Please enter an integer.")
+            except EOFError:
+                print("\nInput stream closed unexpectedly. Exiting.")
+                sys.exit(1)
 
-        if user and check_password_hash(user['password_hash'], password):
-            # Successfully logged in. In a real app, a session token would be issued here.
-            return jsonify({"message": "Login successful!", "user": {"name": user['name'], "email": user['email']}}), 200
-        else:
-            # User not found or password incorrect
-            return jsonify({"message": "Invalid email or password"}), 401
+    print("\n--- Results ---")
+    for i, num in enumerate(numbers):
+        try:
+            factorial_result = calculate_factorial(num)
+            print(f"The factorial of {num} is: {factorial_result}")
+        except (ValueError, TypeError) as e:
+            # This block might not be strictly necessary if input validation for calculate_factorial is perfect
+            # but it's good practice for defense-in-depth.
+            print(f"Error calculating factorial for {num}: {e}")
 
-    except Exception as e:
-        # Log the exception for debugging in a real application
-        app.logger.error(f"Login error: {e}")
-        return jsonify({"message": "An internal server error occurred"}), 500
+    print("\n--- Calculation Complete ---")
 
-if __name__ == '__main__':
-    # Use a secure secret key in production
-    app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_super_secret_key_for_dev_only')
-    app.run(debug=True, port=5000)
+if __name__ == "__main__":
+    main()
