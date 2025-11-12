@@ -31,23 +31,27 @@ jobs:
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
       - name: Generate AI-based code changes
+        shell: bash
         run: |
           echo "Reading issue description..."
           ISSUE_BODY="${{ github.event.issue.body }}"
           echo "Issue Content: $ISSUE_BODY"
 
-          # Example: write issue content into a file (your AI code logic can go here)
+          # Create a fun test file (from your issue example)
+          echo "Hey there 👋 This file was created automatically by the AI PR Bot!" > HELLO_AI.txt
+
+          # Save issue description for reference
           echo "$ISSUE_BODY" > ai_generated_output.txt
 
-          # Example modification to repo (replace with your logic)
+          # Log the update
           echo "Auto-updated at $(date)" >> AUTO_CHANGE_LOG.txt
 
       - name: Commit changes
         run: |
-          git checkout -b auto-pr-${{ github.event.issue.number }}
+          git checkout -b auto-pr-${{ github.event.issue.number }} || git checkout auto-pr-${{ github.event.issue.number }}
           git add .
-          git commit -m "Auto changes for Issue #${{ github.event.issue.number }}"
-          git push origin auto-pr-${{ github.event.issue.number }}
+          git commit -m "Auto changes for Issue #${{ github.event.issue.number }}" || echo "No changes to commit"
+          git push origin auto-pr-${{ github.event.issue.number }} --force
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
