@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Authenticate with Google Cloud via OIDC
         uses: google-github-actions/auth@v2
@@ -48,20 +50,33 @@ jobs:
           # Log timestamp
           echo "Auto-updated at $(date)" >> AUTO_CHANGE_LOG.txt
 
-      - name: Commit changes
+      - name: Commit & push changes (only if any)
+        id: commit_changes
         run: |
+          set -e
           BRANCH="auto-pr-${{ github.event.issue.number }}"
+          # Create or switch to branch
           git checkout -b "$BRANCH" || git checkout "$BRANCH"
+
           git add .
-          git commit -m "Auto changes for Issue #${{ github.event.issue.number }}" || echo "No changes to commit"
-          git push origin "$BRANCH" --force
+
+          # If there are no staged changes, report changed=false
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No changes to commit"
+          else
+            git commit -m "Auto changes for Issue #${{ github.event.issue.number }}"
+            git push origin "$BRANCH" --force
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create Pull Request
+        if: steps.commit_changes.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: auto-pr-${{ github.event.issue.number }}
-          base: main   # 👈 ensures PR goes to main branch
+          base: ${{ github.event.repository.default_branch }}   # use the repo default branch dynamically
           title: "Automated PR for Issue #${{ github.event.issue.number }}"
           body: |
             This PR was automatically generated based on Issue #${{ github.event.issue.number }}.
