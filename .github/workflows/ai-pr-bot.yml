@@ -35,31 +35,33 @@ jobs:
         run: |
           echo "Reading issue description..."
 
-          # Encode the issue body to avoid shell parsing errors
+          # Encode issue body to handle multi-line & emojis safely
           ISSUE_BODY=$(echo "${{ github.event.issue.body }}" | base64)
 
-          # Decode safely and write to file
+          # Decode safely and write to a file
           echo "Decoded Issue Content:" > ai_generated_output.txt
           echo "$ISSUE_BODY" | base64 --decode >> ai_generated_output.txt
 
-          # Create test file
+          # Create sample AI-generated file
           echo "Hey there 👋 This file was created automatically by the AI PR Bot!" > HELLO_AI.txt
 
-          # Log update timestamp
+          # Log timestamp
           echo "Auto-updated at $(date)" >> AUTO_CHANGE_LOG.txt
 
       - name: Commit changes
         run: |
-          git checkout -b auto-pr-${{ github.event.issue.number }} || git checkout auto-pr-${{ github.event.issue.number }}
+          BRANCH="auto-pr-${{ github.event.issue.number }}"
+          git checkout -b "$BRANCH" || git checkout "$BRANCH"
           git add .
           git commit -m "Auto changes for Issue #${{ github.event.issue.number }}" || echo "No changes to commit"
-          git push origin auto-pr-${{ github.event.issue.number }} --force
+          git push origin "$BRANCH" --force
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: auto-pr-${{ github.event.issue.number }}
+          base: main   # 👈 ensures PR goes to main branch
           title: "Automated PR for Issue #${{ github.event.issue.number }}"
           body: |
             This PR was automatically generated based on Issue #${{ github.event.issue.number }}.
