@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <h1 class="mb-4">Your Orders</h1>
+
+    {% if orders %}
+        <div class="accordion" id="ordersAccordion">
+            {% for order in orders %}
+            <div class="accordion-item mb-3 shadow-sm">
+                <h2 class="accordion-header" id="heading{{ order.id }}">
+                    <button class="accordion-button {% if not loop.first %}collapsed{% endif %}" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ order.id }}" aria-expanded="{% if loop.first %}true{% else %}false{% endif %}" aria-controls="collapse{{ order.id }}">
+                        Order #{{ order.id }} - Placed on {{ order.order_date.strftime('%Y-%m-%d %H:%M') }} - Total: <span class="text-primary ms-2">${{ "%.2f" | format(order.total_amount) }}</span>
+                        <span class="badge bg-{{ {'Pending':'warning', 'Processing':'info', 'Shipped':'primary', 'Delivered':'success', 'Cancelled':'danger'}[order.status] }} ms-3">{{ order.status }}</span>
+                    </button>
+                </h2>
+                <div id="collapse{{ order.id }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}" aria-labelledby="heading{{ order.id }}" data-bs-parent="#ordersAccordion">
+                    <div class="accordion-body">
+                        <p><strong>Shipping Address:</strong><br>{{ order.shipping_address | replace('\n', '<br>') | safe }}</p>
+                        <h5>Items:</h5>
+                        <ul class="list-group mb-3">
+                            {% for item in order.items %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                <div class="d-flex align-items-center">
+                                    <img src="{{ item.product.image_url }}" alt="{{ item.product.name }}" style="width: 50px; height: 50px; object-fit: cover; margin-right: 10px;">
+                                    {{ item.product.name }} 
+                                </div>
+                                <span>{{ item.quantity }} x ${{ "%.2f" | format(item.price) }} = <strong>${{ "%.2f" | format(item.quantity * item.price) }}</strong></span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="alert alert-info text-center" role="alert">
+            You haven't placed any orders yet. <a href="{{ url_for('products') }}" class="alert-link">Start shopping!</a>
+        </div>
+    {% endif %}
+
+{% endblock %}
