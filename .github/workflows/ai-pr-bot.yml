@@ -16,17 +16,11 @@ jobs:
 
     steps:
 
-      # ----------------------
-      # CHECKOUT REPO
-      # ----------------------
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ----------------------
-      # GOOGLE CLOUD AUTH (WIF)
-      # ----------------------
       - name: Authenticate with Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -34,17 +28,11 @@ jobs:
           service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
           token_format: access_token
 
-      # ----------------------
-      # SET GIT USER
-      # ----------------------
       - name: Setup Git Identity
         run: |
           git config --global user.name "AI Project Agent"
           git config --global user.email "ai-pr-bot@users.noreply.github.com"
 
-      # ----------------------
-      # AI AGENT FULL PROJECT ANALYSIS
-      # ----------------------
       - name: Run Gemini Intelligent Agent
         id: agent
         env:
@@ -53,11 +41,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "📁 Scanning project structure…"
+          echo "📁 Listing project files..."
           TREE=$(find . -maxdepth 8 -type f | sed 's/^/ - /')
 
-          echo "🧠 Building prompt…"
-          PROMPT=$(cat <<EOF
+          echo "🧠 Building prompt..."
+
+          PROMPT_CONTENT=$(cat <<'EOP'
 You are an AI GitHub Project Engineer.
 
 Your responsibilities:
@@ -68,7 +57,7 @@ Your responsibilities:
 - Delete/rename files if needed
 - Produce clean code following project style
 
-RETURN STRICT JSON ONLY IN THIS FORMAT:
+RETURN STRICT JSON ONLY IN THIS EXACT FORMAT:
 
 {
   "files": [
@@ -78,24 +67,22 @@ RETURN STRICT JSON ONLY IN THIS FORMAT:
   ]
 }
 
-NO MARKDOWN
-NO BACKTICKS
-NO COMMENTS
-NO EXTRA TEXT
-ONLY PURE JSON
+Rules:
+- NO markdown
+- NO backticks
+- NO explanations
+- NO comments
+- ONLY pure JSON object
 
 --- PROJECT TREE ---
-$TREE
-
---- USER ISSUE ---
-$ISSUE_TEXT
-EOF
+EOP
 )
 
-          echo "🔥 Calling Gemini API…"
+          PROMPT="$PROMPT_CONTENT"$'\n'"$TREE"$'\n--- ISSUE ---\n'"$ISSUE_TEXT"$'\n--- END ISSUE ---'
 
-          PAYLOAD=$(jq -n --arg p "$PROMPT" \
-            '{contents:[{parts:[{text:$p}]}]}')
+          echo "🔥 Calling Gemini API..."
+
+          PAYLOAD=$(jq -n --arg p "$PROMPT" '{contents:[{parts:[{text:$p}]}]}')
 
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
@@ -107,31 +94,27 @@ EOF
           AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
 
           if [ -z "$AI_TEXT" ]; then
-            echo "⚠️ AI returned empty. Using fallback."
+            echo "⚠️ Empty response — using fallback."
             AI_TEXT='{"files":[]}'
           fi
 
           echo "$AI_TEXT" > AI_RESPONSE.txt
 
-          echo "🔍 Validating JSON…"
-
+          echo "🔍 Validating JSON..."
           if ! echo "$AI_TEXT" | jq empty >/dev/null 2>&1; then
-            echo "❌ INVALID JSON. Stopping safely."
+            echo "❌ Invalid JSON — stopping."
             exit 0
           fi
 
           FILE_COUNT=$(echo "$AI_TEXT" | jq '.files | length')
-          echo "📦 AI provided $FILE_COUNT file changes."
-
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ No file updates requested."
+            echo "⚠️ No file changes."
             exit 0
           fi
 
           echo "$AI_TEXT" | jq -r '.files[].path' > file_list.txt
 
-          echo "📄 Applying file changes…"
-
+          echo "📄 Applying AI changes..."
           while IFS= read -r FILEPATH; do
             ACTION=$(echo "$AI_TEXT" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .action")
             CONTENT=$(echo "$AI_TEXT" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content // \"\"")
@@ -147,11 +130,9 @@ EOF
                 echo "🗑 Deleted: $FILEPATH"
                 ;;
             esac
+
           done < file_list.txt
 
-      # ----------------------
-      # COMMIT + PUSH
-      # ----------------------
       - name: Commit & Push
         id: commit
         run: |
@@ -161,19 +142,16 @@ EOF
           git add .
 
           if git diff --cached --quiet; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "⚠️ No changes to commit"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "⚠️ Nothing to commit"
             exit 0
           fi
 
           git commit -m "AI Agent: Automated changes for Issue #${{ github.event.issue.number }}"
           git push origin "$BRANCH" --force
-          echo "changed=true" >> $GITHUB_OUTPUT
-          echo "✅ Changes committed and pushed"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "✅ Changes pushed"
 
-      # ----------------------
-      # CREATE PR
-      # ----------------------
       - name: Create Pull Request
         if: steps.commit.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
@@ -183,9 +161,9 @@ EOF
           base: ${{ github.event.repository.default_branch }}
           title: "AI Agent PR for Issue #${{ github.event.issue.number }}"
           body: |
-            This PR was automatically generated using **Gemini 2.5 Flash (Full Agent Mode)**.
+            Automated fix generated by **Gemini 2.5 Flash – Agent Mode**.
 
-            **Issue Content:**
+            **Issue:**
             ```
             ${{ github.event.issue.body }}
             ```
