@@ -1,3 +1,38 @@
+name: AI PR Bot Automation
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  ai_pr_bot:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+      issues: read
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Authenticate with Google Cloud via OIDC
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: "projects/314154954531/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
+          service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
+          token_format: access_token
+
+      - name: Set up Git Identity
+        run: |
+          git config --global user.name "AI Issue Bot"
+          git config --global user.email "ai-issue-bot@users.noreply.github.com"
+
       - name: Run Gemini – Smart Project-Aware Code Generator (V2)
         id: ai_step
         env:
@@ -6,59 +41,44 @@
         run: |
           echo "🧠 Building project file map..."
 
-          # Create a lightweight tree of project files
           find . -type f \
             ! -path "./.git/*" \
             ! -path "./node_modules/*" \
             ! -path "./venv/*" \
             ! -path "./__pycache__/*" > repo_files.txt
 
-          FILE_TREE=$(printf "%s" "$(cat repo_files.txt)" | jq -Rs .)
-
-          # Escape issue text safely
+          FILE_TREE=$(cat repo_files.txt | jq -Rs .)
           ISSUE_ESCAPED=$(printf '%s' "$ISSUE_TEXT" | jq -Rs .)
 
-          echo "🔥 Sending smart request to Gemini AI..."
+          echo "🔥 Sending smart request to Gemini..."
 
-          # ----------- SUPER INTELLIGENT PROMPT -----------
+          # ----- FULLY YAML-SAFE PROMPT -----
+          PROMPT=$(cat << 'ENDPROMPT'
+You are an expert AI GitHub developer assistant.
+You understand complete file structure, code style, imports, and conventions.
+You can modify MULTIPLE files and generate fully updated file contents.
+
+Return ONLY VALID MINIFIED JSON with this format:
+{"files":[{"path":"path/to/file","content":"full file content"}]}
+
+If no updates needed, return:
+{"files":[]}
+
+Do not add explanations, markdown, or non-JSON text.
+ENDPROMPT
+          )
+          # ---------------------------------
+
           PAYLOAD=$(cat <<EOF
           {
             "contents": [{
               "parts": [{
-                "text": "You are an expert AI GitHub developer assistant.\n
-The user has opened a GitHub Issue. Your job is to intelligently modify the project.\n
-You understand complete file structure, code style, imports, naming, and conventions.\n
-You may modify MULTIPLE files.\n
-You generate only VALID JSON with this format:\n
-{
-  \"files\": [
-      {\"path\":\"path/to/file\",\"content\":\"FULL UPDATED FILE CONTENT\"}
-  ]
-}
-If no changes needed, return {\"files\":[]}.
-
-------------------------------
-PROJECT FILE TREE:
-$FILE_TREE
-------------------------------
-
-GITHUB ISSUE:
-$ISSUE_ESCAPED
-------------------------------
-Your task:
-- Understand required behavior
-- Identify correct files to modify
-- Generate updated content following project patterns
-- Ensure all code is fully valid and compilable
-- NEVER write explanations, markdown or comments
-- Only return VALID JSON
-"
+                "text": "$PROMPT\n\nPROJECT_FILE_TREE:\n$FILE_TREE\n\nISSUE_CONTENT:\n$ISSUE_ESCAPED"
               }]
             }]
           }
-          EOF
+EOF
           )
-          # ---------------------------------------------------
 
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
@@ -69,44 +89,65 @@ Your task:
 
           AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
 
-          # Retry logic
           if [ -z "$AI_TEXT" ]; then
-            echo "⚠️ Empty. Retrying…"
-            RESPONSE=$(curl -s -X POST \
-              -H "Content-Type: application/json" \
-              -d "$PAYLOAD" \
-              "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY")
-            AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
-          fi
-
-          if [ -z "$AI_TEXT" ]; then
-            echo "⚠️ Still empty. Using fallback."
+            echo "⚠️ Gemini returned empty. Using fallback."
             AI_TEXT='{"files":[]}'
           fi
 
           echo "$AI_TEXT" > AI_RESPONSE.txt
 
           echo "🔍 Validating JSON..."
-          if ! echo "$AI_TEXT" | jq empty ; then
-            echo "❌ INVALID JSON from AI — using fallback."
+          if ! echo "$AI_TEXT" | jq empty; then
+            echo "❌ INVALID JSON. Using fallback."
             AI_TEXT='{"files":[]}'
-            echo "$AI_TEXT" > AI_RESPONSE.txt
           fi
-
-          echo "✅ JSON valid."
 
           FILE_COUNT=$(echo "$AI_TEXT" | jq '.files | length')
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ No file updates."
+            echo "⚠️ No file changes."
             exit 0
           fi
 
           echo "$AI_TEXT" | jq -r '.files[].path' > file_list.txt
 
-          echo "📄 Applying smart updates..."
+          echo "📄 Applying updates..."
           while IFS= read -r FILEPATH; do
             mkdir -p "$(dirname "$FILEPATH")"
             CONTENT=$(echo "$AI_TEXT" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content")
             printf "%s" "$CONTENT" > "$FILEPATH"
             echo "✔ Updated: $FILEPATH"
           done < file_list.txt
+
+      - name: Add Bot Metadata
+        run: echo "Auto update at $(date)" >> AUTO_CHANGE_LOG.txt
+
+      - name: Commit & Push Changes
+        id: commit_changes
+        run: |
+          BRANCH="auto-pr-${{ github.event.issue.number }}"
+          git checkout -b "$BRANCH" || git checkout "$BRANCH"
+          git add .
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "⚠️ No changes detected"
+            exit 0
+          fi
+          git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
+          git push origin "$BRANCH" --force
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create Pull Request
+        if: steps.commit_changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: auto-pr-${{ github.event.issue.number }}
+          base: ${{ github.event.repository.default_branch }}
+          title: "AI PR Bot: Fix for Issue #${{ github.event.issue.number }}"
+          body: |
+            This PR was automatically generated using **Gemini 2.5 Flash AI**.
+            ## Issue Content
+            ```
+            ${{ github.event.issue.body }}
+            ```
+            🚀 Powered by Gemini AI
