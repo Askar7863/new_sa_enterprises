@@ -15,7 +15,6 @@ jobs:
       issues: read
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -28,12 +27,12 @@ jobs:
           service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
           token_format: access_token
 
-      - name: Set up Git Identity
+      - name: Set up Git identity
         run: |
           git config --global user.name "AI Issue Bot"
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
-      - name: Run Gemini – Generate File Changes (stable payload building)
+      - name: Run Gemini — Generate File Changes
         id: ai_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -41,8 +40,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "🧠 Building repo file list (safe)..."
-          # collect repo files (ignore git internals and large folders)
+          echo "🔥 Preparing repository file tree (safe)..."
+          # list files (ignore git internals and large common directories)
           find . -type f \
             ! -path "./.git/*" \
             ! -path "./node_modules/*" \
@@ -50,79 +49,78 @@ jobs:
             ! -path "./__pycache__/*" \
             -print > repo_files.txt || true
 
+          # Create JSON-safe string for file tree and issue content
           FILE_TREE=$(jq -Rs '.' repo_files.txt)
-          ISSUE_ESCAPED=$(printf "%s" "$ISSUE_TEXT" | jq -Rs '.')
+          ISSUE_SAFE=$(printf "%s" "$ISSUE_TEXT" | jq -Rs '.')
 
-          # Stable prompt block (kept simple & strict)
-          PROMPT=$(cat <<'PROMPT'
-You are an expert AI GitHub developer assistant.
-You understand complete file structure, code style, imports, and conventions.
-You can modify MULTIPLE files and generate fully updated file contents.
+          echo "🧠 Building safe prompt payload..."
+          # Use a strict prompt asking for compact JSON only
+          PROMPT="You are an expert AI GitHub developer assistant. Return only valid JSON.\n\nOutput format:\n{\"files\":[{\"path\":\"path/to/file\",\"content\":\"file content\"}]}\n\nIf no changes required return: {\"files\":[]}\n\nDo NOT include explanations, markdown, or extra text."
 
-Return ONLY VALID MINIFIED JSON with this format:
-{"files":[{"path":"path/to/file","content":"full file content"}]}
-
-If no updates needed, return:
-{"files":[]}
-
-Do not add explanations, markdown, or any non-JSON text.
-PROMPT
-)
-
-          # Use jq to build the JSON payload safely (prevents quoting/YAML issues)
-          jq -n --arg prompt "$PROMPT" --arg tree "$FILE_TREE" --arg issue "$ISSUE_ESCAPED" \
+          # Build the request payload via jq to avoid shell quoting problems
+          jq -n \
+            --arg prompt "$PROMPT" \
+            --arg tree "$FILE_TREE" \
+            --arg issue "$ISSUE_SAFE" \
             '{contents:[{parts:[{text:($prompt + "\n\nPROJECT_FILE_TREE:\n" + $tree + "\n\nISSUE_CONTENT:\n" + $issue)}]}]}' > payload.json
 
-          echo "🔥 Calling Gemini..."
+          echo "🔥 Calling Gemini API..."
+          RESPONSE_FILE="gemini_raw_response.json"
           curl -s -X POST \
             -H "Content-Type: application/json" \
             -d @payload.json \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY" \
-            > gemini_raw_response.json || true
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}" \
+            > "${RESPONSE_FILE}" || true
 
-          # Extract AI text (safe fallback to empty string)
-          AI_TEXT=$(jq -r '.candidates[0].content.parts[0].text // ""' gemini_raw_response.json || echo "")
+          echo "📥 Saving raw response to ${RESPONSE_FILE}"
+          # Extract AI returned text (if any)
+          AI_TEXT=$(jq -r '.candidates[0].content.parts[0].text // ""' "${RESPONSE_FILE}" || echo "")
 
           if [ -z "$AI_TEXT" ]; then
-            echo "⚠️ Gemini returned empty. Using fallback JSON with no changes."
+            echo "⚠️ Gemini returned empty. Using safe fallback (no changes)."
             AI_TEXT='{"files":[]}'
           fi
 
-          echo "$AI_TEXT" > AI_RESPONSE.txt
-
-          echo "🔍 Validating JSON..."
-          if ! printf "%s" "$AI_TEXT" | jq empty >/dev/null 2>&1; then
-            echo "❌ INVALID JSON from AI. Writing fallback and stopping safely."
-            AI_TEXT='{"files":[]}'
-            printf "%s" "$AI_TEXT" > AI_RESPONSE.txt
+          printf '%s' "$AI_TEXT" > AI_RESPONSE.txt
+          echo "🔍 Validating AI JSON output..."
+          if ! printf '%s' "$AI_TEXT" | jq empty >/dev/null 2>&1; then
+            echo "❌ INVALID JSON from AI. Raw output saved at AI_RESPONSE.txt and ${RESPONSE_FILE}."
+            echo "Using safe fallback (no changes) and exiting safely."
+            printf '%s' '{"files":[]}' > AI_RESPONSE.txt
+            exit 0
           fi
 
-          FILE_COUNT=$(printf "%s" "$AI_TEXT" | jq '.files // [] | length')
+          echo "✅ JSON is valid."
+          FILE_COUNT=$(printf '%s' "$AI_TEXT" | jq '.files // [] | length')
+
           if [ "$FILE_COUNT" -eq 0 ]; then
             echo "⚠️ AI returned no files to modify. Exiting without changes."
             exit 0
           fi
 
-          printf "%s" "$AI_TEXT" | jq -r '.files // [] | .[].path' > file_list.txt
+          # create list of files to add/update
+          printf '%s' "$AI_TEXT" | jq -r '.files // [] | .[].path' > file_list.txt
 
           if [ ! -s file_list.txt ]; then
-            echo "⚠️ No file paths detected. Exiting."
+            echo "⚠️ No file paths found in AI output. Exiting safely."
             exit 0
           fi
 
-          echo "📄 Creating/Updating files..."
+          echo "📄 Creating/updating files from AI output..."
           while IFS= read -r FILEPATH; do
+            [ -z "$FILEPATH" ] && continue
             mkdir -p "$(dirname "$FILEPATH")"
-            CONTENT=$(printf "%s" "$AI_TEXT" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content // \"\"")
-            printf "%s" "$CONTENT" > "$FILEPATH"
+            CONTENT=$(printf '%s' "$AI_TEXT" | jq -r --arg p "$FILEPATH" '.files[] | select(.path==$p) | .content // ""')
+            # write content safely (do not add extra newline unless the AI provided one)
+            printf '%s' "$CONTENT" > "$FILEPATH"
             echo "✔ Updated: $FILEPATH"
           done < file_list.txt
 
-      - name: Add Bot Metadata
+      - name: Add bot metadata
         run: |
           echo "Auto update at $(date)" >> AUTO_CHANGE_LOG.txt
 
-      - name: Commit & Push Changes
+      - name: Commit & push changes
         id: commit_changes
         run: |
           set -euo pipefail
@@ -130,13 +128,13 @@ PROMPT
           git checkout -b "$BRANCH" || git checkout "$BRANCH"
           git add .
           if git diff --cached --quiet; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "⚠️ No changes detected"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "⚠️ No changes detected. Exiting."
             exit 0
           fi
           git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
           git push origin "$BRANCH" --force
-          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "changed=true" >> "$GITHUB_OUTPUT"
           echo "✅ Changes committed & pushed"
 
       - name: Create Pull Request
@@ -150,7 +148,7 @@ PROMPT
           body: |
             This PR was automatically generated using **Gemini 2.5 Flash AI**.
 
-            ## Issue Content
+            ## Issue content
             ```
             ${{ github.event.issue.body }}
             ```
