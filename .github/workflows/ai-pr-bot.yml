@@ -21,6 +21,7 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Google OIDC (you already configured)
       - name: Authenticate with Google Cloud via OIDC
         uses: google-github-actions/auth@v2
         with:
@@ -34,34 +35,57 @@ jobs:
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
       # ======================================================
-      #               SAFE AI SECTION (NO FAILURES)
+      #     MAIN AI AGENT – CREATE / MODIFY / DELETE FILES
       # ======================================================
-      - name: Run Gemini – Generate File Changes
-        id: ai_step
+      - name: Run Gemini Agent – Generate Actions
+        id: ai_agent
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
           set -euo pipefail
 
-          echo "🔥 Sending request to Gemini AI..."
+          echo "🔥 Starting Gemini AI Agent…"
 
-          # Base64 safe encoding
+          # ---- SAFELY ENCODE ISSUE BODY ----
           SAFE_ISSUE=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
           DEC_ISSUE=$(printf "%s" "$SAFE_ISSUE" | base64 --decode)
 
-          # ---------- BEST PROMPT FOR GEMINI ----------
+          echo "🧠 Building Agent Prompt…"
+
+          # ---------------- AGENT PROMPT ------------------
           PAYLOAD=$(cat <<EOF
           {
             "contents": [{
               "parts": [{
-                "text": "Return ONLY valid JSON with no markdown.\nFormat: {\"files\":[{\"path\":\"file\",\"content\":\"text\"}]}\nIf no edits needed, return {\"files\":[]}.\nIssue:\n$DEC_ISSUE"
+                "text": "You are an AI GitHub Automation Agent.\n\
+Your job:\n\
+- Analyse the issue\n\
+- Scan the repository structure\n\
+- Modify existing code\n\
+- Add new files\n\
+- Delete unwanted files\n\
+- Refactor code intelligently\n\
+- Generate high quality production-grade code\n\
+- Always return VALID JSON ONLY.\n\n\
+STRICT OUTPUT FORMAT:\n\
+{\n\
+  \"files\": [\n\
+     {\"path\": \"file1\", \"action\": \"create|update|delete\", \"content\": \"file content if any\"}\n\
+  ]\n\
+}\n\n\
+If no changes are required, return:\n\
+{\"files\": []}\n\n\
+Repository Issue:\n\
+$DEC_ISSUE"
               }]
             }]
           }
           EOF
           )
-          # -------------------------------------------------
+          # ----------------------------------------------------
+
+          echo "🔥 Calling Gemini API…"
 
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
@@ -70,70 +94,81 @@ jobs:
 
           echo "$RESPONSE" > gemini_raw_response.json
 
-          RAW_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // ""')
+          RAW=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // ""')
 
-          if [ -z "$RAW_TEXT" ]; then
-            echo "⚠️ Gemini returned empty → using fallback JSON"
-            RAW_TEXT='{"files":[]}'
+          if [ -z "$RAW" ]; then
+            echo "⚠️ Gemini returned empty → fallback"
+            RAW='{"files":[]}'
           fi
 
-          echo "$RAW_TEXT" > AI_RAW.txt
+          echo "$RAW" > AI_RAW.txt
 
-          # -------- CLEAN JSON EXTRACTION --------
-          CLEANED=$(echo "$RAW_TEXT" | sed -n 's/.*\({.*}\).*/\1/p')
+          # ----------- CLEAN JSON EXTRACTION -----------
+          CLEAN=$(echo "$RAW" | sed -n 's/.*\({.*}\).*/\1/p')
 
-          if [ -z "$CLEANED" ]; then
-            echo "⚠️ Could not extract JSON → fallback"
-            CLEANED='{"files":[]}'
+          if [ -z "$CLEAN" ]; then
+            CLEAN='{"files":[]}'
           fi
 
-          # Validate JSON
-          if ! echo "$CLEANED" | jq empty >/dev/null 2>&1; then
-            echo "⚠️ Invalid JSON → fallback"
-            CLEANED='{"files":[]}'
+          if ! echo "$CLEAN" | jq empty >/dev/null 2>&1; then
+            CLEAN='{"files":[]}'
           fi
 
-          echo "$CLEANED" > AI_RESPONSE.txt
-          echo "✅ JSON cleaned & validated."
+          echo "$CLEAN" > AI_RESPONSE.txt
+          echo "✅ Clean JSON extracted."
 
-          FILE_COUNT=$(echo "$CLEANED" | jq '.files | length')
+          FILE_COUNT=$(echo "$CLEAN" | jq '.files | length')
 
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ AI returned no files to modify."
+            echo "⚠️ No file actions requested."
             exit 0
           fi
 
-          echo "$CLEANED" | jq -r '.files[].path' > file_list.txt
+          echo "$CLEAN" | jq -r '.files[].path' > file_list.txt
 
-          echo "📄 Creating/Updating files..."
+          echo "📄 Executing AI file operations…"
+
           while IFS= read -r FILEPATH; do
-            mkdir -p "$(dirname "$FILEPATH")"
-            CONTENT=$(echo "$CLEANED" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content")
-            printf "%s" "$CONTENT" > "$FILEPATH"
-            echo "✔ Updated: $FILEPATH"
+            ACTION=$(echo "$CLEAN" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .action")
+            CONTENT=$(echo "$CLEAN" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content")
+
+            case "$ACTION" in
+              create|update)
+                mkdir -p "$(dirname "$FILEPATH")"
+                printf "%s" "$CONTENT" > "$FILEPATH"
+                echo "✔ $ACTION → $FILEPATH"
+                ;;
+              delete)
+                if [ -f "$FILEPATH" ]; then
+                  rm "$FILEPATH"
+                  echo "🗑 Deleted → $FILEPATH"
+                fi
+                ;;
+            esac
           done < file_list.txt
 
       - name: Add Bot Metadata
         run: |
-          echo "Auto update at $(date)" >> AUTO_CHANGE_LOG.txt
+          echo "Last AI update: $(date)" >> AI_METADATA.log
 
       # ======================================================
-      #              GIT COMMIT + OPEN PR
+      # Commit + Push + PR
       # ======================================================
       - name: Commit & Push Changes
         id: commit_changes
         run: |
-          BRANCH="auto-pr-${{ github.event.issue.number }}"
+          BRANCH="ai-agent-${{ github.event.issue.number }}"
           git checkout -b "$BRANCH" || git checkout "$BRANCH"
+
           git add .
 
           if git diff --cached --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
-            echo "⚠️ No changes detected"
+            echo "⚠️ No changes created."
             exit 0
           fi
 
-          git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
+          git commit -m "AI Agent: Automated changes for Issue #${{ github.event.issue.number }}"
           git push origin "$BRANCH" --force
           echo "changed=true" >> $GITHUB_OUTPUT
 
@@ -142,15 +177,18 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          branch: auto-pr-${{ github.event.issue.number }}
+          branch: ai-agent-${{ github.event.issue.number }}
           base: ${{ github.event.repository.default_branch }}
-          title: "AI PR Bot: Fix for Issue #${{ github.event.issue.number }}"
+          title: "AI Agent PR – Issue #${{ github.event.issue.number }}"
           body: |
-            This PR was automatically generated using **Gemini 2.5 Flash AI**.
+            AI Agent has analyzed your issue and performed automated file operations.
 
-            ## Issue Content
+            ## Issue
             ```
             ${{ github.event.issue.body }}
             ```
 
-            🚀 Powered by **Gemini AI**
+            ## Notes
+            - Smart file creation, updating, and deletion
+            - Automatic PR generation
+            - Powered by Gemini 2.5 Flash 🚀
