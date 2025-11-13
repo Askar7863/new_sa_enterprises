@@ -21,7 +21,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # OIDC still needed (but NOT used by Gemini)
       - name: Authenticate with Google Cloud via OIDC
         uses: google-github-actions/auth@v2
         with:
@@ -35,15 +34,18 @@ jobs:
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
       # ======================================================
-      #  SAFE AI SECTION (NULL-PROOF, STRICT JSON, NO FAILURES)
+      #  SAFE AI SECTION (BASE64 FIX ADDED)
       # ======================================================
       - name: Run Gemini – Generate File Changes
         id: ai_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ISSUE_TEXT: ${{ github.event.issue.body }}
+          ISSUE_BASE64: ${{ github.event.issue.body | toJSON | base64 }}
         run: |
           echo "🔥 Sending request to Gemini AI..."
+
+          # SAFELY decode issue text
+          ISSUE_TEXT=$(echo "$ISSUE_BASE64" | base64 --decode)
 
           PAYLOAD=$(cat <<EOF
           {
@@ -75,7 +77,7 @@ jobs:
 
           echo "🔍 Validating JSON..."
 
-          # Validate JSON before using it
+          # Validate JSON
           echo "$AI_TEXT" | jq empty 2>/dev/null
           if [ $? -ne 0 ]; then
             echo "❌ INVALID JSON from AI. Check AI_RESPONSE.txt"
@@ -84,7 +86,6 @@ jobs:
 
           echo "✅ JSON is valid."
 
-          # NULL-SAFE extraction of files array
           FILE_COUNT=$(echo "$AI_TEXT" | jq '.files // [] | length')
 
           if [ "$FILE_COUNT" -eq 0 ]; then
@@ -92,7 +93,6 @@ jobs:
             exit 0
           fi
 
-          # Extract file paths safely
           echo "$AI_TEXT" | jq -r '.files // [] | .[].path' > file_list.txt
 
           if [ ! -s file_list.txt ]; then
@@ -102,7 +102,6 @@ jobs:
 
           echo "📄 Creating/Updating files..."
 
-          # Create or update files from AI output
           while IFS= read -r FILEPATH; do
             DIR=$(dirname "$FILEPATH")
             mkdir -p "$DIR"
@@ -117,9 +116,6 @@ jobs:
         run: |
           echo "Auto update at $(date)" >> AUTO_CHANGE_LOG.txt
 
-      # ==========================
-      # COMMIT + PUSH + PR CREATION
-      # ==========================
       - name: Commit & Push Changes
         id: commit_changes
         run: |
@@ -162,4 +158,3 @@ jobs:
             - Opened this Pull Request
 
             🚀 Powered by **Gemini AI**
-
