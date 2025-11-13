@@ -76,8 +76,11 @@ jobs:
           echo "$AI_TEXT" > AI_RESPONSE.txt
 
           echo "🔍 Validating JSON..."
-          echo "$AI_TEXT" | jq empty 2>/dev/null
-          if [ $? -ne 0 ]; then
+
+          # ✅ FIXED: prevent jq from crashing workflow
+          echo "$AI_TEXT" | jq empty 2>/dev/null || true
+
+          if ! echo "$AI_TEXT" | jq empty >/dev/null 2>&1; then
             echo "❌ INVALID JSON from AI. Check AI_RESPONSE.txt"
             exit 0
           fi
@@ -105,8 +108,8 @@ jobs:
             mkdir -p "$DIR"
 
             CONTENT=$(echo "$AI_TEXT" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content // \"\"")
-
             echo "$CONTENT" > "$FILEPATH"
+
             echo "✔ Updated: $FILEPATH"
           done < file_list.txt
 
