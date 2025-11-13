@@ -33,6 +33,9 @@ jobs:
           git config --global user.name "AI Issue Bot"
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
+      # ======================================================
+      #  AI SECTION — GUARANTEED JSON + RETRY + FALLBACK
+      # ======================================================
       - name: Run Gemini – Generate File Changes
         id: ai_step
         env:
@@ -41,67 +44,72 @@ jobs:
         run: |
           echo "🔥 Sending request to Gemini AI..."
 
-          ISSUE_SAFE=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
-          DEC_ISSUE=$(printf "%s" "$ISSUE_SAFE" | base64 --decode)
-
-          # ------ FIXED PROMPT (enforced JSON) ------
+          # ----------- SIMPLE, RELIABLE PROMPT -----------
           PAYLOAD=$(cat <<EOF
           {
             "contents": [{
               "parts": [{
-                "text": "You MUST output STRICT MINIFIED JSON ONLY.\n\nYour response must be valid JSON that jq can parse.\n\nIf you cannot determine what to do, respond exactly with:\n\n{\"files\":[]}\n\nRules:\n- NO markdown\n- NO conversational text\n- NO backticks\n- NO comments\n- NO newlines outside JSON\n- Only return a pure JSON object.\n\nOutput format:\n{\"files\": [{\"path\":\"path/to/file\",\"content\":\"file text here\"}]}\n\nIf no changes, return:\n{\"files\":[]}\n\n--- ISSUE ---\n$DEC_ISSUE\n--- END ISSUE ---"
+                "text": "Return ONLY valid JSON. No markdown.\nFormat:\n{\"files\":[{\"path\":\"file\",\"content\":\"text\"}]}\nIf no changes needed, return {\"files\":[]}.\nIssue:\n$ISSUE_TEXT"
               }]
             }]
           }
           EOF
           )
-          # ---------------------------------------------
+          # -------------------------------------------------
 
+          # FIRST CALL
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY")
 
           echo "$RESPONSE" > gemini_raw_response.json
-
           AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
 
+          # RETRY IF EMPTY
           if [ -z "$AI_TEXT" ]; then
-            echo "❌ AI returned EMPTY response. Stopping safely."
-            exit 0
+            echo "⚠️ Gemini returned empty. Retrying…"
+            PAYLOAD2="{\"contents\":[{\"parts\":[{\"text\":\"Give JSON only like this: {\\\"files\\\":[]}. Issue: $ISSUE_TEXT\"}]}]}"
+
+            RESPONSE=$(curl -s -X POST \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD2" \
+              "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY")
+
+            AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
+          fi
+
+          # FINAL FALLBACK
+          if [ -z "$AI_TEXT" ]; then
+            echo "⚠️ Gemini still empty — using fallback."
+            AI_TEXT='{"files":[]}'
           fi
 
           echo "$AI_TEXT" > AI_RESPONSE.txt
 
           echo "🔍 Validating JSON..."
-          echo "$AI_TEXT" | jq empty 2>/dev/null || true
-
           if ! echo "$AI_TEXT" | jq empty >/dev/null 2>&1; then
-            echo "❌ INVALID JSON from AI. Check AI_RESPONSE.txt"
-            exit 0
+            echo "❌ Invalid JSON. Using fallback."
+            AI_TEXT='{"files":[]}'
+            echo "$AI_TEXT" > AI_RESPONSE.txt
           fi
 
           echo "✅ JSON is valid."
 
-          FILE_COUNT=$(echo "$AI_TEXT" | jq '.files // [] | length')
-
+          # Count files
+          FILE_COUNT=$(echo "$AI_TEXT" | jq '.files | length')
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ AI returned no files to modify."
+            echo "⚠️ AI returned no files. Stopping safely."
             exit 0
           fi
 
-          echo "$AI_TEXT" | jq -r '.files // [] | .[].path' > file_list.txt
-          if [ ! -s file_list.txt ]; then
-            echo "⚠️ No paths found. AI returned empty structure."
-            exit 0
-          fi
+          echo "$AI_TEXT" | jq -r '.files[].path' > file_list.txt
 
           echo "📄 Creating/Updating files..."
           while IFS= read -r FILEPATH; do
-            DIR=$(dirname "$FILEPATH")
-            mkdir -p "$DIR"
-            CONTENT=$(echo "$AI_TEXT" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content // \"\"")
-            echo "$CONTENT" > "$FILEPATH"
+            mkdir -p "$(dirname "$FILEPATH")"
+            CONTENT=$(echo "$AI_TEXT" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content")
+            printf "%s" "$CONTENT" > "$FILEPATH"
             echo "✔ Updated: $FILEPATH"
           done < file_list.txt
 
@@ -123,7 +131,6 @@ jobs:
           git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
           git push origin "$BRANCH" --force
           echo "changed=true" >> $GITHUB_OUTPUT
-          echo "✅ Changes committed & pushed"
 
       - name: Create Pull Request
         if: steps.commit_changes.outputs.changed == 'true'
