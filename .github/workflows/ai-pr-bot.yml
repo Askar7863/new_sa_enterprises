@@ -15,12 +15,13 @@ jobs:
       issues: read
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # You ARE authenticating to GCP, but Gemini API does NOT need this anymore.
+      # Still required (OIDC → GCP), but NOT used for Gemini API anymore
       - name: Authenticate with Google Cloud via OIDC
         uses: google-github-actions/auth@v2
         with:
@@ -28,51 +29,81 @@ jobs:
           service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
           token_format: access_token
 
-      - name: Set up Git
+      - name: Set up Git Identity
         run: |
           git config --global user.name "AI Issue Bot"
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
-      - name: Call Gemini API (AI generation)
-        id: ai_output
+      # ---------------------------
+      # MAIN AI PROCESSING STEP
+      # ---------------------------
+      - name: Run Gemini – Analyze Issue, Fix Code, Generate Files
+        id: ai_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
-          echo "Sending issue text to Gemini..."
+          echo "🔥 Sending issue request to Gemini AI..."
+
+          PAYLOAD=$(cat <<EOF
+          {
+            "contents": [{
+              "parts": [{
+                "text": "You are an AI GitHub automation bot. Read this issue and do EXACTLY the following:\n\n1. Analyze the user's request.\n2. Fix or modify any existing files if required.\n3. If the issue requests new code, generate it.\n4. If the issue requests file changes, output EXACT file paths + corrected content.\n5. Return ONLY structured JSON format like this:\n{\n \"files\": [\n   { \"path\": \"src/example.js\", \"content\": \"file text here\" },\n   { \"path\": \"README.md\", \"content\": \"updated readme\" }\n ]\n}\n\nHere is the issue:\n$ISSUE_TEXT"
+              }]
+            }]
+          }
+          EOF
+          )
+
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
-            -d "{\"contents\": [{\"parts\": [{\"text\": \"$ISSUE_TEXT\"}]}]}" \
+            -d "$PAYLOAD" \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY")
 
           echo "$RESPONSE" > gemini_raw_response.json
 
-          # Extract only the model text (safe)
           AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text')
 
-          echo "$AI_TEXT" > AI_GENERATED_OUTPUT.txt
+          echo "$AI_TEXT" > AI_RESPONSE.txt
 
-      - name: Generate additional files
+          echo "🔍 Parsing AI JSON output..."
+
+          echo "$AI_TEXT" | jq -r '.files[] | "\(.path)"' > file_list.txt
+
+          while IFS= read -r FILEPATH; do
+            DIR=$(dirname "$FILEPATH")
+            mkdir -p "$DIR"
+
+            FILE_CONTENT=$(echo "$AI_TEXT" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content")
+
+            echo "$FILE_CONTENT" > "$FILEPATH"
+            echo "📄 Generated/Updated: $FILEPATH"
+          done < file_list.txt
+
+      # Extra logging or files if you want
+      - name: Add Bot Metadata
         run: |
-          echo "Hey there 👋 This file was created automatically by the AI PR Bot!" > HELLO_AI.txt
-          echo "Auto-updated at $(date)" >> AUTO_CHANGE_LOG.txt
+          echo "Auto update at $(date)" >> AUTO_CHANGE_LOG.txt
 
-      - name: Commit & push changes (only if any)
+      - name: Commit & push changes
         id: commit_changes
         run: |
           set -e
+
           BRANCH="auto-pr-${{ github.event.issue.number }}"
           git checkout -b "$BRANCH" || git checkout "$BRANCH"
 
           git add .
 
           if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No changes to commit"
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No changes created by AI"
           else
-            git commit -m "AI-generated changes for Issue #${{ github.event.issue.number }}"
+            git commit -m "AI: Automated changes for Issue #${{ github.event.issue.number }}"
             git push origin "$BRANCH" --force
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "✅ Changes committed"
           fi
 
       - name: Create Pull Request
@@ -82,10 +113,17 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: auto-pr-${{ github.event.issue.number }}
           base: ${{ github.event.repository.default_branch }}
-          title: "AI PR Bot: Automated PR for Issue #${{ github.event.issue.number }}"
+          title: "AI PR Bot: Fix for Issue #${{ github.event.issue.number }}"
           body: |
-            This PR was automatically generated via Gemini AI.
-            Issue content:
+            This PR was automatically created using **Gemini AI**.
+            
+            ### Issue content:
             ```
             ${{ github.event.issue.body }}
             ```
+
+            ### AI Output Summary:
+            - Files were added or modified based on your request.
+            - See commit diff for details.
+
+            ⚡ Generated by AI PR Bot
