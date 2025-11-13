@@ -1,4 +1,4 @@
-name: AI PR Bot — Advanced Repo-Aware Developer (Mode-2)
+name: ai-pr-bot-mode2
 
 on:
   issues:
@@ -13,404 +13,216 @@ permissions:
 jobs:
   ai_pr_bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Authenticate with Google Cloud via OIDC
-        id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: "projects/314154954531/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
           service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
           token_format: access_token
 
-      - name: Configure Git Identity
+      - name: Configure git
         run: |
           git config --global user.name "AI Issue Bot"
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
-      - name: Create ai_tmp dir
+      - name: Prepare workspace
         run: |
           mkdir -p .github/ai_tmp
-
-      - name: Build repo snapshot (preview + chunking)
-        id: build_snapshot
-        run: |
-          set -euo pipefail
-          SNAPSHOT=.github/ai_tmp/repo_snapshot.json
-          python3 - <<'PY' > "$SNAPSHOT"
-import os,sys,json,base64
-out=[]
-MAX_FULL=int(os.environ.get("MAX_FULL",20000))
-PREVIEW_HEAD=int(os.environ.get("PREVIEW_HEAD",8000))
-PREVIEW_TAIL=int(os.environ.get("PREVIEW_TAIL",8000))
-for root,dirs,files in os.walk("."):
-    # skip common heavy dirs
-    if root.startswith("./.git") or "node_modules" in root or root.startswith("./.venv") or "__pycache__" in root:
-        continue
-    for f in files:
-        p=os.path.join(root,f)
-        if p.startswith("./.git") or p.startswith("./node_modules") or p.startswith("./.github/ai_tmp"):
-            continue
-        try:
-            size=os.path.getsize(p)
-            if size > 2000000:
-                out.append({"path":p[2:],"size":size,"mode":"skip","note":"file-too-large"})
-                continue
-            with open(p,"rb") as fh:
-                data=fh.read()
-            if size <= MAX_FULL:
-                preview_b64=base64.b64encode(data).decode("utf-8")
-                out.append({"path":p[2:],"size":size,"mode":"full","preview_b64":preview_b64})
-            else:
-                head=data[:PREVIEW_HEAD]
-                tail=data[-PREVIEW_TAIL:] if len(data)>PREVIEW_HEAD+PREVIEW_TAIL else b""
-                preview_b64=base64.b64encode(head + b"\n---TRUNCATED---\n" + tail).decode("utf-8")
-                out.append({"path":p[2:],"size":size,"mode":"preview","preview_b64":preview_b64})
-        except Exception as e:
-            out.append({"path":p[2:],"size":None,"mode":"error","note":str(e)})
-print(json.dumps(out))
-PY
-          echo "snapshot_file=$SNAPSHOT" >> $GITHUB_OUTPUT
 
       - name: Parse issue intent
         id: parse_intent
         env:
-          RAW_ISSUE: ${{ github.event.issue.body }}
+          ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
-          set -euo pipefail
-          mkdir -p .github/ai_tmp
-          python3 - <<'PY' > .github/ai_tmp/intent.json
-import os,re,json
-text = os.environ.get("RAW_ISSUE","").strip()
+          python3 - <<'PY'
+import os, re, json
+text = os.environ.get("ISSUE_TEXT","").strip()
 blocks = [b.strip() for b in re.split(r'\n-{3,}\n|\n\n+', text) if b.strip()]
 intent = {"commands": []}
 for b in blocks:
     lines = b.splitlines()
     header = lines[0].strip() if lines else ""
+    body = "\n".join(lines[1:]).strip()
     cmd = {}
-    if header.upper().startswith("CREATE FILE:"):
+    if header.lower().startswith("create file:"):
         cmd["type"]="create"
         cmd["path"]=header.split(":",1)[1].strip()
-    elif header.upper().startswith("MODIFY FILE:"):
+    elif header.lower().startswith("modify file:"):
         cmd["type"]="modify"
         cmd["path"]=header.split(":",1)[1].strip()
-    elif header.upper().startswith("DELETE FILE:"):
+    elif header.lower().startswith("delete file:"):
         cmd["type"]="delete"
         cmd["path"]=header.split(":",1)[1].strip()
-    elif header.upper().startswith("ANALYZE REPO"):
+    elif "analyze repo" in header.lower():
         cmd["type"]="analyze"
-    elif header.upper().startswith("FIND FUNCTION:"):
+    elif header.lower().startswith("find function:"):
         cmd["type"]="find"
         cmd["target"]=header.split(":",1)[1].strip()
     else:
-        first = header.split()[0].lower() if header else ""
-        cmd["type"]=first if first else "unknown"
-    body = "\n".join(lines[1:]).strip()
-    allow = re.search(r'ALLOW_FAILING:\s*(true|false)', body, re.IGNORECASE)
-    cmd["allow_failing"] = (allow.group(1).lower() == "true") if allow else False
-    desc = re.sub(r'ALLOW_FAILING:.*','', body, flags=re.IGNORECASE).strip()
-    cmd["description"] = desc
+        cmd["type"]="unknown"
+    allow = re.search(r'ALLOW_FAILING:\s*(true|false)', body, re.I)
+    cmd["allow_failing"] = (allow.group(1).lower() == 'true') if allow else False
+    cmd["description"] = re.sub(r'ALLOW_FAILING:.*','', body, flags=re.I).strip()
     intent["commands"].append(cmd)
 open(".github/ai_tmp/intent.json","w").write(json.dumps(intent))
 print(json.dumps(intent))
 PY
-          echo "intent_file=.github/ai_tmp/intent.json" >> $GITHUB_OUTPUT
 
-      - name: Prepare payload for Gemini
-        id: prepare_payload
-        env:
-          RAW_ISSUE: ${{ github.event.issue.body }}
+      - name: Build repo snapshot
+        id: snapshot
         run: |
-          set -euo pipefail
-          INSTRUCT=$'You are an AI software engineer. You will receive:\n1) an explicit intent JSON (commands),\n2) a structured repo snapshot (path,size,mode,preview_b64),\n3) the issue text.\n\nRules:\n- If a command.type is create/modify/delete and provides a path, ONLY modify that path unless command.type==\"analyze\".\n- Return ONLY valid JSON matching this schema exactly:\n  {\"files\":[{\"path\":\"...\",\"action\":\"create|update|delete\",\"content_base64\":\"<base64 utf8>\"}],\"summary\":\"short text\",\"fix_rounds\":N}\n- If no edits are needed: {\"files\":[],\"summary\":\"no changes needed\"}\n- If you need more info: {\"files\":[],\"summary\":\"need_more_info: <explain>\"}\n\nNow I will provide intent, issue, and repo_snapshot.\n'
-          ISSUE="$RAW_ISSUE"
-          SNAPSHOT_PATH=".github/ai_tmp/repo_snapshot.json"
-          INTENT_PATH=".github/ai_tmp/intent.json"
-          # load intent as a JSON string safely
-          INTENT_STR=$(cat "$INTENT_PATH" | python3 -c "import sys,json;print(json.dumps(json.load(sys.stdin)))")
-          PAYLOAD=$(jq -n --arg instr "$INSTRUCT" --arg intent "$INTENT_STR" --arg issue "$ISSUE" --slurpfile snap "$SNAPSHOT_PATH" \
-            '{contents:[{parts:[{text:$instr},{text:"### INTENT\n"},{text:$intent},{text:"### ISSUE\n"},{text:$issue},{text:"### REPO_SNAPSHOT\n"},{text: ($snap[0]|tostring)}]}]}')
-          echo "$PAYLOAD" > .github/ai_tmp/payload.json
-          echo "payload_file=.github/ai_tmp/payload.json" >> $GITHUB_OUTPUT
+          python3 - <<'PY'
+import os, json, base64
+out=[]
+MAX_FULL=20000
+HEAD=8000
+TAIL=8000
+for root, dirs, files in os.walk("."):
+    if any(x in root for x in [".git", "node_modules", ".venv", "__pycache__", ".github/ai_tmp"]):
+        continue
+    for f in files:
+        p=os.path.join(root,f)
+        if p.startswith("./.git") or p.startswith("./node_modules") or p.startswith("./.github/ai_tmp"):
+            continue
+        rel=p[2:]
+        try:
+            size=os.path.getsize(p)
+            if size > 2000000:
+                out.append({"path":rel,"size":size,"mode":"skip"})
+                continue
+            with open(p,"rb") as fh:
+                data=fh.read()
+            if size <= MAX_FULL:
+                out.append({"path":rel,"size":size,"mode":"full","preview_b64":base64.b64encode(data).decode()})
+            else:
+                head=data[:HEAD]
+                tail=data[-TAIL:] if len(data) > HEAD+TAIL else b""
+                preview=b"".join([head,b"\n---TRUNCATED---\n",tail])
+                out.append({"path":rel,"size":size,"mode":"preview","preview_b64":base64.b64encode(preview).decode()})
+        except Exception as e:
+            out.append({"path":rel,"mode":"error","note":str(e)})
+open(".github/ai_tmp/repo_snapshot.json","w").write(json.dumps(out))
+print("snapshot_written")
+PY
 
-      - name: Call Gemini (with retries & extract JSON block)
+      - name: Build Gemini payload
+        id: build_payload
+        run: |
+          INSTRUCT="You are an AI engineer. Respond ONLY with valid JSON matching: {\"files\":[{\"path\":\"...\",\"action\":\"create|update|delete\",\"content_base64\":\"...\"}],\"summary\":\"...\"}."
+          ISSUE="${{ github.event.issue.body }}"
+          INTENT=$(cat .github/ai_tmp/intent.json)
+          SNAPSHOT=$(cat .github/ai_tmp/repo_snapshot.json)
+          jq -n --arg instr "$INSTRUCT" --arg issue "$ISSUE" --arg intent "$INTENT" --arg snap "$SNAPSHOT" \
+            '{contents:[{parts:[{text:$instr},{text:"### INTENT\n"},{text:$intent},{text:"### ISSUE\n"},{text:$issue},{text:"### SNAPSHOT\n"},{text:$snap}]}]}' \
+            > .github/ai_tmp/payload.json
+          echo "payload_ready"
+
+      - name: Call Gemini (retry)
         id: call_gemini
-        env:
-          RETRY_MAX: 3
         run: |
-          set -euo pipefail
-          mkdir -p .github/ai_tmp
           TOKEN=$(gcloud auth print-access-token)
-          PAYLOAD_FILE=".github/ai_tmp/payload.json"
-          OUT_RAW=".github/ai_tmp/gemini_raw.json"
-          OUT_TEXT=".github/ai_tmp/ai_response.txt"
-          CLEAN_JSON=".github/ai_tmp/ai_json_clean.json"
-          try=0
-          while :; do
-            try=$((try+1))
-            echo "Attempt #$try to call Gemini..."
-            curl -s -X POST \
-              -H "Authorization: Bearer $TOKEN" \
-              -H "Content-Type: application/json" \
-              -d @"$PAYLOAD_FILE" \
-              "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" > "$OUT_RAW" || true
-            AI_TEXT=$(jq -r '.candidates[0].content.parts[0].text // ""' "$OUT_RAW" 2>/dev/null || echo "")
-            echo "$AI_TEXT" > "$OUT_TEXT"
-            # Extract first JSON object from AI_TEXT (heuristic)
-            JSON_BLOCK=$(echo "$AI_TEXT" | awk 'BEGIN{start=0}{ if(start==0 && match($0,/^\s*{/)){start=1; s=$0; next} if(start==1){ s=s"\n"$0; if(match($0,/^\s*}$/)){ print s; exit }}}')
-            if [ -z "$JSON_BLOCK" ]; then
-              JSON_BLOCK="$AI_TEXT"
+          PAYLOAD=.github/ai_tmp/payload.json
+          RAW=.github/ai_tmp/gemini_raw.json
+          TXT=.github/ai_tmp/ai_text.txt
+          CLEAN=.github/ai_tmp/ai.json
+          MAX=3
+          i=0
+          while [ $i -lt $MAX ]; do
+            i=$((i+1))
+            echo "call attempt $i"
+            curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d @"$PAYLOAD" "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" > "$RAW" || true
+            # try to extract the AI text safely
+            txt=$(jq -r '.candidates[0].content.parts[0].text // ""' "$RAW" 2>/dev/null || echo "")
+            echo "$txt" > "$TXT"
+            # try to grab first JSON block
+            json_block=$(echo "$txt" | awk 'BEGIN{in=0} { if(in==0 && match($0,/^\s*{/)){in=1; s=$0; next} if(in==1){ s=s "\n" $0; if(match($0,/^\s*}$/)){ print s; exit }}}')
+            if [ -z "$json_block" ]; then
+              json_block="$txt"
             fi
-            echo "$JSON_BLOCK" > "$CLEAN_JSON".tmp || true
-            if cat "$CLEAN_JSON".tmp | jq empty >/dev/null 2>&1; then
-              mv "$CLEAN_JSON".tmp "$CLEAN_JSON"
-              echo "valid=1" > .github/ai_tmp/valid_flag
+            if echo "$json_block" | jq empty >/dev/null 2>&1; then
+              echo "$json_block" > "$CLEAN"
+              echo "valid_json=1" > .github/ai_tmp/flags
               break
             else
-              echo "Model returned invalid JSON on attempt $try."
-              rm -f "$CLEAN_JSON".tmp || true
-              if [ "$try" -ge "$RETRY_MAX" ]; then
-                echo "Max retries reached, saving raw output."
-                cp "$OUT_RAW" .github/ai_tmp/gemini_last_raw.json || true
-                echo "failed=true" > .github/ai_tmp/status.txt
-                exit 0
-              else
-                sleep 2
-              fi
+              echo "invalid json on attempt $i"
+              sleep 2
             fi
           done
-          echo "failed=false" > .github/ai_tmp/status.txt
-          echo "valid_json_file=.github/ai_tmp/ai_json_clean.json" >> $GITHUB_OUTPUT
+          if [ ! -f "$CLEAN" ]; then
+            echo "failed=true" > .github/ai_tmp/flags
+          fi
 
-      - name: Parse AI JSON and apply file changes
+      - name: Apply AI changes
         id: apply_changes
         run: |
-          set -euo pipefail
-          STS_FILE=".github/ai_tmp/status.txt"
-          if [ -f "$STS_FILE" ] && grep -q "failed=true" "$STS_FILE"; then
-            echo "Model failed to produce valid JSON after retries."
+          FLAGS=".github/ai_tmp/flags"
+          if [ -f "$FLAGS" ] && grep -q "failed=true" "$FLAGS"; then
+            echo "No valid AI JSON produced. Exiting."
             echo "changed=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          JSON_FILE=".github/ai_tmp/ai_json_clean.json"
-          if [ ! -s "$JSON_FILE" ]; then
-            echo "No JSON file from AI — exiting."
+          JSON=".github/ai_tmp/ai.json"
+          if [ ! -f "$JSON" ]; then
             echo "changed=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          FILE_COUNT=$(jq '.files | length' "$JSON_FILE" 2>/dev/null || echo "0")
-          if [ "$FILE_COUNT" -eq 0 ]; then
-            SUMMARY=$(jq -r '.summary // "no changes needed"' "$JSON_FILE" 2>/dev/null || echo "no changes")
-            echo "AI returned no file edits. summary=$SUMMARY"
+          count=$(jq '.files | length' "$JSON" 2>/dev/null || echo 0)
+          if [ "$count" -eq 0 ]; then
             echo "changed=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          CHANGED=false
-          jq -c '.files[]' "$JSON_FILE" | while read -r fileobj; do
-            path=$(echo "$fileobj" | jq -r '.path')
-            action=$(echo "$fileobj" | jq -r '.action')
-            content_b64=$(echo "$fileobj" | jq -r '.content_base64 // empty')
+          changed=false
+          jq -c '.files[]' "$JSON" | while read -r item; do
+            path=$(echo "$item" | jq -r '.path')
+            action=$(echo "$item" | jq -r '.action')
+            content_b64=$(echo "$item" | jq -r '.content_base64 // ""')
             case "$action" in
               create|update)
-                if [ -z "$content_b64" ]; then
-                  echo "No content_base64 for $path; skipping."
-                  continue
-                fi
                 mkdir -p "$(dirname "$path")"
                 echo "$content_b64" | base64 --decode > "$path"
-                echo "✔ $action $path"
-                CHANGED=true
+                echo "applied $action $path"
+                changed=true
                 ;;
               delete)
-                rm -f "$path" && echo "🗑 deleted $path" || echo "❗ $path not found"
-                CHANGED=true
+                rm -f "$path" && echo "deleted $path" || echo "delete missing $path"
+                changed=true
                 ;;
               *)
-                echo "Unknown action '$action' for $path"
+                echo "unknown action $action for $path"
                 ;;
             esac
           done
-
-          if [ "$CHANGED" = true ]; then
+          if [ "$changed" = true ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Run sanity checks and tests (best-effort)
-        id: run_tests
+      - name: Commit & push
+        if: steps.apply_changes.outputs.changed == 'true'
+        id: commit
         run: |
-          set -euo pipefail
-          echo "Running lightweight sanity checks..."
-          FAILED_LOG=".github/ai_tmp/fail.log"
-          rm -f "$FAILED_LOG" || true
-          STATUS=0
-          if [ -f package.json ]; then
-            npm ci --no-audit --no-fund || true
-            if jq -r '.scripts.test' package.json 2>/dev/null | grep -q .; then
-              npm test || STATUS=1
-            fi
-            if jq -r '.scripts.lint' package.json 2>/dev/null | grep -q .; then
-              npm run lint || true
-            fi
-          fi
-
-          if [ -f requirements.txt ]; then
-            python3 -m pip install -r requirements.txt || true
-            if [ -d tests ] || ls test* 2>/dev/null | grep -q .; then
-              python3 -m pytest -q || STATUS=1
-            fi
-          fi
-
-          if [ "$STATUS" -ne 0 ]; then
-            echo "Tests or checks failed" > "$FAILED_LOG"
-            echo "tests_failed=true" > .github/ai_tmp/tests_status.txt
-          else
-            echo "tests_failed=false" > .github/ai_tmp/tests_status.txt
-          fi
-          echo "tests_status_file=.github/ai_tmp/tests_status.txt" >> $GITHUB_OUTPUT
-
-      - name: Repair loop (if tests failed and allow_failing is false)
-        id: repair_loop
-        run: |
-          set -euo pipefail
-          TESTS_STATUS_FILE=".github/ai_tmp/tests_status.txt"
-          INTENT_FILE=".github/ai_tmp/intent.json"
-          if [ -f "$TESTS_STATUS_FILE" ] && grep -q "tests_failed=true" "$TESTS_STATUS_FILE"; then
-            echo "Tests failed. Inspecting intent to see allow_failing..."
-            ALLOW=false
-            if jq -r '.commands[].allow_failing' "$INTENT_FILE" | grep -q true; then
-              ALLOW=true
-            fi
-            if [ "$ALLOW" = true ]; then
-              echo "At least one command allows failing tests. Proceeding to create PR with allow-failing label."
-              echo "repair_needed=false" > .github/ai_tmp/repair_flag
-              exit 0
-            fi
-
-            echo "Starting repair loop (max 2 rounds)..."
-            REPAIR_MAX=2
-            round=0
-            while [ $round -lt $REPAIR_MAX ]; do
-              round=$((round+1))
-              echo "Repair round $round..."
-              # collect failing logs (best-effort)
-              FAIL_LOG=".github/ai_tmp/fail_detail_round${round}.txt"
-              echo "Collecting logs (best-effort)..." > "$FAIL_LOG"
-              # Add last gemini raw if present
-              if [ -f .github/ai_tmp/gemini_raw.json ]; then
-                jq -r '.candidates[0].content.parts[0].text // ""' .github/ai_tmp/gemini_raw.json >> "$FAIL_LOG" 2>/dev/null || true
-              fi
-              # Add simple test failure note
-              echo "Tests failed on runner. Please fix code to make tests pass." >> "$FAIL_LOG"
-
-              # prepare repair payload including previous AI JSON and failing logs
-              PREV_AI_JSON=".github/ai_tmp/ai_json_clean.json"
-              REPAIR_INSTR=$'You are an AI software engineer. Tests failed after your last edits. Use the previous JSON (files applied) and the failing logs to fix the code. Return only updated files (schema as before). If you cannot fix, return files=[] and summary explaining why.\n'
-              PAYLOAD=$(jq -n --arg instr "$REPAIR_INSTR" --argfile prev "$PREV_AI_JSON" --arg logs "$(cat "$FAIL_LOG")" --slurpfile snap .github/ai_tmp/repo_snapshot.json \
-                '{contents:[{parts:[{text:$instr},{text:"### PREVIOUS_AI_JSON\n"},{text:($prev|tostring)},{text:"### FAIL_LOG\n"},{text:$logs},{text:"### SNAPSHOT\n"},{text: ($snap[0]|tostring)}]}]}')
-              TOKEN=$(gcloud auth print-access-token)
-              curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$PAYLOAD" "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" > .github/ai_tmp/gemini_repair_raw_${round}.json || true
-              REPLY=$(jq -r '.candidates[0].content.parts[0].text // ""' .github/ai_tmp/gemini_repair_raw_${round}.json 2>/dev/null || echo "")
-              echo "$REPLY" > .github/ai_tmp/gemini_repair_text_${round}.txt
-              # extract JSON block
-              JSON_BLOCK=$(echo "$REPLY" | awk 'BEGIN{start=0}{ if(start==0 && match($0,/^\s*{/)){start=1; s=$0; next} if(start==1){ s=s"\n"$0; if(match($0,/^\s*}$/)){ print s; exit }}}')
-              if [ -z "$JSON_BLOCK" ]; then
-                JSON_BLOCK="$REPLY"
-              fi
-              if echo "$JSON_BLOCK" | jq empty >/dev/null 2>&1; then
-                echo "$JSON_BLOCK" > .github/ai_tmp/ai_repair_json_round${round}.json
-                # apply repair edits (reuse apply logic)
-                jq -c '.files[]' .github/ai_tmp/ai_repair_json_round${round}.json 2>/dev/null | while read -r fileobj; do
-                  path=$(echo "$fileobj" | jq -r '.path')
-                  action=$(echo "$fileobj" | jq -r '.action')
-                  content_b64=$(echo "$fileobj" | jq -r '.content_base64 // empty')
-                  case "$action" in
-                    create|update)
-                      if [ -z "$content_b64" ]; then
-                        echo "No content_base64 for $path; skipping."
-                        continue
-                      fi
-                      mkdir -p "$(dirname "$path")"
-                      echo "$content_b64" | base64 --decode > "$path"
-                      echo "✔ Repair applied $action $path"
-                      ;;
-                    delete)
-                      rm -f "$path" && echo "🗑 deleted $path" || echo "❗ $path not found"
-                      ;;
-                  esac
-                done
-                # rerun tests
-                STATUS=0
-                if [ -f package.json ]; then
-                  npm ci --no-audit --no-fund || true
-                  if jq -r '.scripts.test' package.json 2>/dev/null | grep -q .; then
-                    npm test || STATUS=1
-                  fi
-                fi
-                if [ -f requirements.txt ]; then
-                  python3 -m pip install -r requirements.txt || true
-                  if [ -d tests ] || ls test* 2>/dev/null | grep -q .; then
-                    python3 -m pytest -q || STATUS=1
-                  fi
-                fi
-                if [ $STATUS -eq 0 ]; then
-                  echo "repairs_fixed=true" > .github/ai_tmp/repair_result.txt
-                  echo "Tests pass after repair."
-                  exit 0
-                else
-                  echo "repairs_fixed=false" > .github/ai_tmp/repair_result.txt
-                  echo "Repair round $round did not fix tests; continuing."
-                fi
-              else
-                echo "Repair output invalid JSON; continuing to next round."
-              fi
-            done
-            # after repair attempts
-            echo "repair_done=true" > .github/ai_tmp/repair_done.txt
-          else
-            echo "No test failures detected; no repair needed."
-          fi
-
-      - name: Commit & Push Changes (if any)
-        id: commit_changes
-        run: |
-          set -euo pipefail
-          CHANGED=${{ steps.apply_changes.outputs.changed || 'false' }}
-          # fallback: if apply_changes wrote changed=true in GITHUB_OUTPUT file
-          if [ -f .github/ai_tmp ] && grep -q "changed=true" .github/ai_tmp/* 2>/dev/null || git status --porcelain | grep -q .; then
-            CHANGED_LOCAL=true
-          else
-            CHANGED_LOCAL=false
-          fi
-          if [ "$CHANGED_LOCAL" = false ]; then
-            echo "No changes to commit."
-            echo "changed=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          BRANCH="auto-pr-${{ github.event.issue.number }}"
-          git checkout -b "$BRANCH" || git checkout "$BRANCH"
+          BR="auto-pr-${{ github.event.issue.number }}"
+          git checkout -b "$BR" || git checkout "$BR"
           git add -A
           if git diff --cached --quiet; then
-            echo "No diff to commit."
             echo "changed=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
-          git push origin "$BRANCH" --force
+          git push origin "$BR" --force
           echo "changed=true" >> $GITHUB_OUTPUT
 
-      - name: Create Pull Request
-        if: steps.commit_changes.outputs.changed == 'true'
+      - name: Create PR
+        if: steps.commit.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -418,36 +230,9 @@ PY
           base: ${{ github.event.repository.default_branch }}
           title: "AI PR Bot: Automated Fix for Issue #${{ github.event.issue.number }}"
           body: |
-            This PR was created automatically using **Gemini AI** (Repo-Aware Mode).
-            ### Issue
-            ```
-            ${{ github.event.issue.body }}
-            ```
-            ### Summary (AI-provided)
-            ${{ steps.call_gemini.outputs.summary || 'No summary provided by AI' }}
+            This PR was generated automatically by AI.
 
-      - name: Comment on Issue if AI failed or repairs unsuccessful
-        if: always()
-        run: |
-          set -euo pipefail
-          # if model failed to produce JSON
-          if [ -f .github/ai_tmp/status.txt ] && grep -q "failed=true" .github/ai_tmp/status.txt; then
-            gh issue comment ${{ github.event.issue.number }} --body "AI attempted to process this issue but failed to produce valid JSON after retries. Please refine the issue or review logs in the workflow artifacts."
-            exit 0
-          fi
-          # if repair attempts completed but didn't fix tests
-          if [ -f .github/ai_tmp/repair_done.txt ] && [ -f .github/ai_tmp/repair_result.txt ] && grep -q "repairs_fixed=false" .github/ai_tmp/repair_result.txt; then
-            gh issue comment ${{ github.event.issue.number }} --body "AI attempted repairs but tests still fail. See attached artifacts for details."
-            exit 0
-          fi
-          # if changed=false and no errors, optionally comment
-          if git status --porcelain | grep -q .; then
-            echo "Changes are present; PR created if commit step succeeded."
-          else
-            echo "No changes and no errors."
-          fi
-
-      - name: Upload debug artifacts
+      - name: Upload debug
         if: always()
         uses: actions/upload-artifact@v4
         with:
