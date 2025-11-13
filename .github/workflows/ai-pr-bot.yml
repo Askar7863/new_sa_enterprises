@@ -33,9 +33,6 @@ jobs:
           git config --global user.name "AI Issue Bot"
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
-      # ======================================================
-      #  AI SECTION — GUARANTEED JSON + RETRY + FALLBACK
-      # ======================================================
       - name: Run Gemini – Generate File Changes
         id: ai_step
         env:
@@ -44,32 +41,32 @@ jobs:
         run: |
           echo "🔥 Sending request to Gemini AI..."
 
-          # ----------- SIMPLE, RELIABLE PROMPT -----------
+          # ---------- FIXED PROMPT (Relaxed but safe) ----------
           PAYLOAD=$(cat <<EOF
           {
             "contents": [{
               "parts": [{
-                "text": "Return ONLY valid JSON. No markdown.\nFormat:\n{\"files\":[{\"path\":\"file\",\"content\":\"text\"}]}\nIf no changes needed, return {\"files\":[]}.\nIssue:\n$ISSUE_TEXT"
+                "text": "You are an AI code generator.\nYou MUST return valid JSON in the format:\n{\n  \"files\": [\n     { \"path\": \"path/to/file\", \"content\": \"new file content\" }\n  ]\n}\nIf no changes are required, return:\n{\"files\": []}\nDo not include explanations.\nHere is the GitHub Issue:\n$ISSUE_TEXT"
               }]
             }]
           }
           EOF
           )
-          # -------------------------------------------------
+          # -----------------------------------------------------
 
-          # FIRST CALL
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY")
 
           echo "$RESPONSE" > gemini_raw_response.json
+
           AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
 
-          # RETRY IF EMPTY
+          # Retry on empty
           if [ -z "$AI_TEXT" ]; then
             echo "⚠️ Gemini returned empty. Retrying…"
-            PAYLOAD2="{\"contents\":[{\"parts\":[{\"text\":\"Give JSON only like this: {\\\"files\\\":[]}. Issue: $ISSUE_TEXT\"}]}]}"
+            PAYLOAD2="{\"contents\":[{\"parts\":[{\"text\":\"Return JSON only. Format: {\\\"files\\\":[]} Issue: $ISSUE_TEXT\"}]}]}"
 
             RESPONSE=$(curl -s -X POST \
               -H "Content-Type: application/json" \
@@ -79,7 +76,7 @@ jobs:
             AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
           fi
 
-          # FINAL FALLBACK
+          # Final fallback
           if [ -z "$AI_TEXT" ]; then
             echo "⚠️ Gemini still empty — using fallback."
             AI_TEXT='{"files":[]}'
@@ -89,17 +86,16 @@ jobs:
 
           echo "🔍 Validating JSON..."
           if ! echo "$AI_TEXT" | jq empty >/dev/null 2>&1; then
-            echo "❌ Invalid JSON. Using fallback."
+            echo "❌ INVALID JSON from AI. Fallback used."
             AI_TEXT='{"files":[]}'
             echo "$AI_TEXT" > AI_RESPONSE.txt
           fi
 
           echo "✅ JSON is valid."
 
-          # Count files
           FILE_COUNT=$(echo "$AI_TEXT" | jq '.files | length')
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ AI returned no files. Stopping safely."
+            echo "⚠️ AI returned no files to modify."
             exit 0
           fi
 
@@ -125,7 +121,6 @@ jobs:
           git add .
           if git diff --cached --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
-            echo "⚠️ No changes detected"
             exit 0
           fi
           git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
