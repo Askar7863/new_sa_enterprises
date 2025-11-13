@@ -37,15 +37,10 @@ jobs:
           RAW_ISSUE: ${{ github.event.issue.body }}
         run: |
           set -euo pipefail
-
           echo "🔥 Preparing issue text safely..."
+          ISSUE_TEXT="$RAW_ISSUE"
 
-          ISSUE_B64=$(printf "%s" "$RAW_ISSUE" | base64 -w 0)
-          ISSUE_TEXT=$(printf "%s" "$ISSUE_B64" | base64 --decode)
-
-          echo "🔥 Calling Gemini..."
-
-          # -------- FIXED jq: NO concat, NO '+' symbol --------
+          echo "🔥 Building payload safely..."
           PAYLOAD=$(jq -n --arg msg "$ISSUE_TEXT" '
             {
               contents: [
@@ -53,13 +48,17 @@ jobs:
                   parts: [
                     {
                       text: (
-                        "You are an AI GitHub Agent.\n" +
-                        "Respond ONLY with valid JSON.\n" +
-                        "Format:\n" +
-                        "{\"files\":[{\"path\":\"file\",\"action\":\"create|update|delete\",\"content\":\"text\"}]}\n" +
-                        "If no changes needed, return {\"files\":[]}.\n" +
-                        "GitHub Issue:\n" +
-                        $msg
+" You are an AI GitHub Agent.
+Only return valid JSON.
+Format:
+{
+  \"files\": [
+    {\"path\": \"file\", \"action\": \"create|update|delete\", \"content\": \"text\"}
+  ]
+}
+If no changes needed, return {\"files\":[]}.
+GitHub Issue:
+" + $msg
                       )
                     }
                   ]
@@ -67,8 +66,8 @@ jobs:
               ]
             }
           ')
-          # ------------------------------------------------------
 
+          echo "🔥 Calling Gemini..."
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
@@ -77,11 +76,9 @@ jobs:
           echo "$RESPONSE" > gemini_raw_response.json
 
           AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // "{}"')
-
           echo "$AI_TEXT" > AI_RESPONSE.txt
 
           echo "🔍 Validating JSON..."
-
           if ! echo "$AI_TEXT" | jq empty >/dev/null 2>&1; then
             echo "❌ INVALID JSON — stopping safely."
             exit 0
@@ -96,7 +93,6 @@ jobs:
           echo "$AI_TEXT" | jq -r '.files[] | @base64' > files64.txt
 
           echo "📄 Applying file changes..."
-
           while IFS= read -r fb; do
             obj=$(echo "$fb" | base64 --decode)
             path=$(echo "$obj" | jq -r '.path')
@@ -125,13 +121,11 @@ jobs:
           BRANCH="auto-pr-${{ github.event.issue.number }}"
           git checkout -b "$BRANCH" || git checkout "$BRANCH"
           git add .
-
           if git diff --cached --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
             echo "⚠️ No changes to commit."
             exit 0
           fi
-
           git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
           git push origin "$BRANCH" --force
           echo "changed=true" >> $GITHUB_OUTPUT
@@ -146,7 +140,6 @@ jobs:
           title: "AI PR Bot: Automated Fix for Issue #${{ github.event.issue.number }}"
           body: |
             This PR was created automatically using **Gemini 2.5 Flash AI**.
-
             ### Issue
             ```
             ${{ github.event.issue.body }}
