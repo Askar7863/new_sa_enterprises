@@ -1,92 +1,26 @@
-name: AI PR Bot Automation
-
-on:
-  issues:
-    types: [opened, edited]
-
-jobs:
-  ai_pr_bot:
-    runs-on: ubuntu-latest
-
-    permissions:
-      id-token: write
-      contents: write
-      pull-requests: write
-      issues: read
-
-    steps:
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Authenticate with Google Cloud via OIDC
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: "projects/314154954531/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
-          service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
-          token_format: access_token
-
-      - name: Configure Git Identity
-        run: |
-          git config --global user.name "AI Issue Bot"
-          git config --global user.email "ai-issue-bot@users.noreply.github.com"
-
-      # ======================================================
-      # STEP 1 --- JSON JAIL (Make Gemini obey JSON rules)
-      # ======================================================
-      - name: JSON Jail Check
-        id: json_jail
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          echo "🧪 Running JSON Jail..."
-
-          PAYLOAD='{"contents":[{"parts":[{"text":"Respond ONLY with this exact JSON: {\"ok\": true}"}]}]}'
-
-          RESPONSE=$(curl -s -X POST \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY")
-
-          AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
-
-          echo "$AI_TEXT" > jail_response.txt
-
-          if [ "$AI_TEXT" != '{"ok": true}' ]; then
-            echo "❌ FAILED JSON JAIL"
-            echo "Output was:"
-            cat jail_response.txt
-            exit 1
-          fi
-
-          echo "✅ JSON Jail passed."
-
-      # ======================================================
-      # STEP 2 --- MAIN AI PROCESSING
-      # ======================================================
       - name: Run Gemini – Generate File Changes
         id: ai_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
-          echo "🔥 Generating code changes..."
+          echo "🔥 Asking Gemini for file changes..."
 
           SAFE_ISSUE=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
           DEC_ISSUE=$(printf "%s" "$SAFE_ISSUE" | base64 --decode)
 
+          # --- BEST-POSSIBLE PROMPT (Gemini always obeys) ---
           PAYLOAD=$(cat <<EOF
           {
             "contents": [{
               "parts": [{
-                "text": "Return ONLY valid JSON.\nNo markdown. No explanations.\nFormat:\n{\"files\":[{\"path\":\"file\",\"content\":\"text\"}]}\nIf no change needed, return {\"files\":[]}.\nIssue:\n$DEC_ISSUE"
+                "text": "Return ONLY JSON.\nNo markdown. No text.\nFormat example:\n{\"files\":[{\"path\":\"file\",\"content\":\"text\"}]}\nIf no edits needed, return {\"files\":[]}.\nIssue:\n$DEC_ISSUE"
               }]
             }]
           }
           EOF
           )
+          # --------------------------------------------------
 
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
@@ -95,71 +29,47 @@ jobs:
 
           echo "$RESPONSE" > gemini_raw_response.json
 
-          AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
+          RAW_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // ""')
 
-          if [ -z "$AI_TEXT" ]; then
-            echo "⚠️ EMPTY response; using fallback."
-            AI_TEXT='{"files":[]}'
+          if [ -z "$RAW_TEXT" ]; then
+            echo "⚠️ EMPTY RESPONSE → fallback"
+            RAW_TEXT='{"files":[]}'
           fi
 
-          echo "$AI_TEXT" > AI_RESPONSE.txt
+          echo "$RAW_TEXT" > AI_RAW.txt
 
-          # Validate JSON
-          if ! echo "$AI_TEXT" | jq empty >/dev/null 2>&1; then
-            echo "❌ INVALID JSON; using safe fallback."
-            AI_TEXT='{"files":[]}'
-            echo "$AI_TEXT" > AI_RESPONSE.txt
+          # --- EXTRACT JSON FROM ANY GARBAGE ---
+          CLEANED=$(echo "$RAW_TEXT" | sed -n 's/.*\({.*}\).*/\1/p')
+
+          if [ -z "$CLEANED" ]; then
+            echo "⚠️ Could not extract JSON → fallback"
+            CLEANED='{"files":[]}'
           fi
 
-          FILE_COUNT=$(echo "$AI_TEXT" | jq '.files | length')
+          echo "$CLEANED" > AI_RESPONSE.txt
+
+          # --- Validate JSON ---
+          if ! echo "$CLEANED" | jq empty >/dev/null 2>&1; then
+            echo "⚠️ Invalid JSON → fallback"
+            CLEANED='{"files":[]}'
+            echo "$CLEANED" > AI_RESPONSE.txt
+          fi
+
+          echo "✅ JSON cleaned and validated."
+
+          FILE_COUNT=$(echo "$CLEANED" | jq '.files | length')
 
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ No files generated."
+            echo "⚠️ No files to create."
             exit 0
           fi
 
-          echo "$AI_TEXT" | jq -r '.files[].path' > file_list.txt
+          echo "$CLEANED" | jq -r '.files[].path' > file_list.txt
 
           echo "📄 Writing files..."
           while IFS= read -r FILEPATH; do
             mkdir -p "$(dirname "$FILEPATH")"
-            CONTENT=$(echo "$AI_TEXT" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content")
+            CONTENT=$(echo "$CLEANED" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content")
             printf "%s" "$CONTENT" > "$FILEPATH"
             echo "✔ Updated: $FILEPATH"
           done < file_list.txt
-
-      # ======================================================
-      # COMMIT + PR
-      # ======================================================
-      - name: Commit & Push Changes
-        id: commit_changes
-        run: |
-          BRANCH="auto-pr-${{ github.event.issue.number }}"
-          git checkout -b "$BRANCH" || git checkout "$BRANCH"
-
-          git add .
-
-          if git diff --cached --quiet; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          git commit -m "AI automated file updates for Issue #${{ github.event.issue.number }}"
-          git push origin "$BRANCH" --force
-          echo "changed=true" >> $GITHUB_OUTPUT
-
-      - name: Create Pull Request
-        if: steps.commit_changes.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: auto-pr-${{ github.event.issue.number }}
-          base: ${{ github.event.repository.default_branch }}
-          title: "AI PR Bot – Automated Fix for Issue #${{ github.event.issue.number }}"
-          body: |
-            This PR was created automatically by the **Gemini AI PR Bot**.
-
-            ## Issue Content
-            ```
-            ${{ github.event.issue.body }}
-            ```
