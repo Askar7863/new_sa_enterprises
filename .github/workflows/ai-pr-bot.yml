@@ -15,10 +15,9 @@ jobs:
       issues: read
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Authenticate with Google Cloud via OIDC
         uses: google-github-actions/auth@v2
@@ -32,50 +31,29 @@ jobs:
           git config --global user.name "AI Issue Bot"
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
-      - name: Run Gemini – Generate File Changes
+      - name: Run Gemini and Generate Changes
         id: ai_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
-          set -euo pipefail
+          ISSUE_TEXT="${{ github.event.issue.body }}"
 
-          echo "📁 Building project tree (safe)..."
-          # limit depth to avoid enormous payloads
-          TREE=$(find . -maxdepth 4 -type f -not -path "./.git/*" -print | sed 's/^/ - /' | head -n 500)
+          echo "Calling Gemini..."
 
-          echo "🧠 Building safe prompt..."
-          # Single-quoted heredoc prevents YAML/Action interpolation problems
-          PROMPT_TEMPLATE=$(cat <<'PROMPT_EOF'
-You are an AI GitHub Project Engineer. Read the project tree and the Issue below and respond with STRICT JSON ONLY.
-
-REQUIRED JSON FORMAT (exactly):
-{
-  "files": [
-    { "path": "path/to/file", "action": "create|update|delete", "content": "file contents (for create/update only)" }
-  ]
-}
-
-RULES:
-- Return only the JSON object above. No explanations, no markdown, no backticks.
-- If there are no edits required, return: {"files":[]}
-- Ensure JSON is valid and minified or pretty — jq will validate it.
-
---- PROJECT TREE START ---
-PROMPT_EOF
-)
-
-          # assemble final prompt (use shell variables only)
-          PROMPT="${PROMPT_TEMPLATE}
-${TREE}
---- PROJECT TREE END ---
-
---- ISSUE START ---
-${ISSUE_TEXT}
---- ISSUE END ---"
-
-          echo "🔥 Calling Gemini API..."
-          PAYLOAD=$(jq -n --arg prompt "$PROMPT" '{contents:[{parts:[{text:$prompt}]}]}')
+          # Build safe JSON payload
+          PAYLOAD=$(jq -n --arg msg "$ISSUE_TEXT" '
+            {
+              contents: [
+                {
+                  parts: [
+                    {
+                      text: ("You MUST respond ONLY with valid JSON. Format: {\"files\":[{\"path\":\"file\",\"action\":\"create|update|delete\",\"content\":\"text\"}]} If no changes, return {\"files\":[]} Issue: " + $msg)
+                    }
+                  ]
+                }
+              ]
+            }
+          ')
 
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
@@ -84,78 +62,61 @@ ${ISSUE_TEXT}
 
           echo "$RESPONSE" > gemini_raw_response.json
 
-          # Extract plain model text safely
-          AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
-
-          if [ -z "$AI_TEXT" ]; then
-            echo "⚠️ AI returned empty. Using safe fallback and exiting."
-            AI_TEXT='{"files":[]}'
-          fi
+          AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // "{}"')
 
           echo "$AI_TEXT" > AI_RESPONSE.txt
 
-          echo "🔍 Validate returned JSON..."
+          # Validate JSON
           if ! echo "$AI_TEXT" | jq empty >/dev/null 2>&1; then
-            echo "❌ INVALID JSON from AI — saved to AI_RESPONSE.txt and gemini_raw_response.json"
-            # do NOT fail the workflow hard; stop safely
+            echo "Invalid JSON. Stopping."
             exit 0
           fi
 
           FILE_COUNT=$(echo "$AI_TEXT" | jq '.files | length')
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ No file edits requested by AI. Nothing to do."
+            echo "No files returned by AI."
             exit 0
           fi
 
-          echo "$AI_TEXT" | jq -r '.files[] | @base64' > files_base64.txt
+          echo "$AI_TEXT" | jq -r '.files[] | @base64' > files64.txt
 
-          echo "📄 Applying AI file operations..."
-          while IFS= read -r FB; do
-            OBJ=$(echo "$FB" | base64 --decode)
-            PATH_FIELD=$(echo "$OBJ" | jq -r '.path')
-            ACTION=$(echo "$OBJ" | jq -r '.action')
-            CONTENT=$(echo "$OBJ" | jq -r '.content // ""')
+          while IFS= read -r fb; do
+            obj=$(echo "$fb" | base64 --decode)
+            path=$(echo "$obj" | jq -r '.path')
+            action=$(echo "$obj" | jq -r '.action')
+            content=$(echo "$obj" | jq -r '.content // ""')
 
-            case "$ACTION" in
+            case "$action" in
               create|update)
-                mkdir -p "$(dirname "$PATH_FIELD")"
-                printf '%s' "$CONTENT" > "$PATH_FIELD"
-                echo "✔ $ACTION: $PATH_FIELD"
+                mkdir -p "$(dirname "$path")"
+                printf "%s" "$content" > "$path"
+                echo "Updated $path"
                 ;;
               delete)
-                if [ -f "$PATH_FIELD" ]; then
-                  rm -f "$PATH_FIELD"
-                  echo "🗑 delete: $PATH_FIELD"
-                else
-                  echo "ℹ️ delete requested but file not present: $PATH_FIELD"
-                fi
+                rm -f "$path"
+                echo "Deleted $path"
                 ;;
               *)
-                echo "⚠️ Unknown action '$ACTION' for $PATH_FIELD — skipping."
+                echo "Unknown action $action"
                 ;;
             esac
-          done < files_base64.txt
-
-      - name: Add Bot Metadata
-        run: |
-          echo "Auto update at $(date -u)" >> AUTO_CHANGE_LOG.txt
+          done < files64.txt
 
       - name: Commit & Push Changes
         id: commit_changes
         run: |
-          set -euo pipefail
           BRANCH="auto-pr-${{ github.event.issue.number }}"
           git checkout -b "$BRANCH" || git checkout "$BRANCH"
           git add .
+
           if git diff --cached --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
-            echo "⚠️ No changes to commit"
             exit 0
           fi
-          git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
+
+          git commit -m "AI Auto Update for Issue #${{ github.event.issue.number }}"
           git push origin "$BRANCH" --force
           echo "changed=true" >> $GITHUB_OUTPUT
-          echo "✅ Changes committed & pushed"
 
       - name: Create Pull Request
         if: steps.commit_changes.outputs.changed == 'true'
@@ -164,10 +125,11 @@ ${ISSUE_TEXT}
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: auto-pr-${{ github.event.issue.number }}
           base: ${{ github.event.repository.default_branch }}
-          title: "AI PR Bot: Automated changes for Issue #${{ github.event.issue.number }}"
+          title: "AI PR Bot – Fix for Issue #${{ github.event.issue.number }}"
           body: |
-            This PR was generated by the AI PR Bot using Gemini 2.5 Flash.
-            Issue:
+            This PR was created automatically using Gemini 2.5 Flash.
+
+            **Issue content:**
             ```
             ${{ github.event.issue.body }}
             ```
