@@ -9,9 +9,9 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      id-token: write       # required for OIDC authentication
-      contents: write       # required for committing changes
-      pull-requests: write  # required for opening PRs
+      id-token: write
+      contents: write
+      pull-requests: write
       issues: read
 
     steps:
@@ -20,6 +20,7 @@ jobs:
         with:
           fetch-depth: 0
 
+      # You ARE authenticating to GCP, but Gemini API does NOT need this anymore.
       - name: Authenticate with Google Cloud via OIDC
         uses: google-github-actions/auth@v2
         with:
@@ -32,22 +33,28 @@ jobs:
           git config --global user.name "AI Issue Bot"
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
-      - name: Generate AI-based code changes
-        shell: bash
+      - name: Call Gemini API (AI generation)
+        id: ai_output
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
-          echo "Reading issue description..."
+          echo "Sending issue text to Gemini..."
+          RESPONSE=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"contents\": [{\"parts\": [{\"text\": \"$ISSUE_TEXT\"}]}]}" \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY")
 
-          # Encode issue body to handle multi-line & emojis safely
-          ISSUE_BODY=$(echo "${{ github.event.issue.body }}" | base64)
+          echo "$RESPONSE" > gemini_raw_response.json
 
-          # Decode safely and write to a file
-          echo "Decoded Issue Content:" > ai_generated_output.txt
-          echo "$ISSUE_BODY" | base64 --decode >> ai_generated_output.txt
+          # Extract only the model text (safe)
+          AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text')
 
-          # Create sample AI-generated file
+          echo "$AI_TEXT" > AI_GENERATED_OUTPUT.txt
+
+      - name: Generate additional files
+        run: |
           echo "Hey there 👋 This file was created automatically by the AI PR Bot!" > HELLO_AI.txt
-
-          # Log timestamp
           echo "Auto-updated at $(date)" >> AUTO_CHANGE_LOG.txt
 
       - name: Commit & push changes (only if any)
@@ -55,17 +62,15 @@ jobs:
         run: |
           set -e
           BRANCH="auto-pr-${{ github.event.issue.number }}"
-          # Create or switch to branch
           git checkout -b "$BRANCH" || git checkout "$BRANCH"
 
           git add .
 
-          # If there are no staged changes, report changed=false
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No changes to commit"
           else
-            git commit -m "Auto changes for Issue #${{ github.event.issue.number }}"
+            git commit -m "AI-generated changes for Issue #${{ github.event.issue.number }}"
             git push origin "$BRANCH" --force
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
@@ -76,10 +81,10 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: auto-pr-${{ github.event.issue.number }}
-          base: ${{ github.event.repository.default_branch }}   # use the repo default branch dynamically
-          title: "Automated PR for Issue #${{ github.event.issue.number }}"
+          base: ${{ github.event.repository.default_branch }}
+          title: "AI PR Bot: Automated PR for Issue #${{ github.event.issue.number }}"
           body: |
-            This PR was automatically generated based on Issue #${{ github.event.issue.number }}.
+            This PR was automatically generated via Gemini AI.
             Issue content:
             ```
             ${{ github.event.issue.body }}
