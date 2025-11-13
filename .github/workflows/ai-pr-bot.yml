@@ -33,29 +33,33 @@ jobs:
           git config --global user.name "AI Issue Bot"
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
+      # ===================================================================
+      # AI SECTION — FIXED: ALWAYS VALID JSON, NEVER EMPTY OR INVALID
+      # ===================================================================
       - name: Run Gemini – Generate File Changes
         id: ai_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ISSUE_TEXT: ${{ github.event.issue.body }}
+
         run: |
           echo "🔥 Sending request to Gemini AI..."
 
-          ISSUE_SAFE=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
-          DEC_ISSUE=$(printf "%s" "$ISSUE_SAFE" | base64 --decode)
+          SAFE_TEXT=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
+          DEC_ISSUE=$(printf "%s" "$SAFE_TEXT" | base64 --decode)
 
-          # ------ FIXED PROMPT (enforced JSON) ------
+          # ------- FIXED PROMPT --------
           PAYLOAD=$(cat <<EOF
           {
             "contents": [{
               "parts": [{
-                "text": "You MUST output STRICT MINIFIED JSON ONLY.\n\nYour response must be valid JSON that jq can parse.\n\nIf you cannot determine what to do, respond exactly with:\n\n{\"files\":[]}\n\nRules:\n- NO markdown\n- NO conversational text\n- NO backticks\n- NO comments\n- NO newlines outside JSON\n- Only return a pure JSON object.\n\nOutput format:\n{\"files\": [{\"path\":\"path/to/file\",\"content\":\"file text here\"}]}\n\nIf no changes, return:\n{\"files\":[]}\n\n--- ISSUE ---\n$DEC_ISSUE\n--- END ISSUE ---"
+                "text": "You are an automated GitHub PR bot.\n\nYour task:\n1. Understand the issue.\n2. Modify existing files OR create new files.\n3. Always return STRICT VALID JSON.\n\nOutput must ALWAYS follow this format:\n{\"files\":[{\"path\":\"filepath\",\"content\":\"file content\"}]}\n\nRules:\n- No markdown\n- No explanations\n- No comments\n- No backticks\n- Only minified JSON\n- If no changes required: {\"files\":[]}\n\n--- ISSUE START ---\n$DEC_ISSUE\n--- ISSUE END ---"
               }]
             }]
           }
           EOF
           )
-          # ---------------------------------------------
+          # ------------------------------
 
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
@@ -66,42 +70,35 @@ jobs:
 
           AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
 
+          echo "$AI_TEXT" > AI_RESPONSE.txt
+
           if [ -z "$AI_TEXT" ]; then
             echo "❌ AI returned EMPTY response. Stopping safely."
             exit 0
           fi
 
-          echo "$AI_TEXT" > AI_RESPONSE.txt
-
           echo "🔍 Validating JSON..."
-          echo "$AI_TEXT" | jq empty 2>/dev/null || true
-
           if ! echo "$AI_TEXT" | jq empty >/dev/null 2>&1; then
-            echo "❌ INVALID JSON from AI. Check AI_RESPONSE.txt"
+            echo "❌ INVALID JSON from AI. Stopping safely."
             exit 0
           fi
 
           echo "✅ JSON is valid."
 
-          FILE_COUNT=$(echo "$AI_TEXT" | jq '.files // [] | length')
+          FILE_COUNT=$(echo "$AI_TEXT" | jq '.files | length')
 
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ AI returned no files to modify."
+            echo "⚠️ No files to modify. Exiting."
             exit 0
           fi
 
-          echo "$AI_TEXT" | jq -r '.files // [] | .[].path' > file_list.txt
-          if [ ! -s file_list.txt ]; then
-            echo "⚠️ No paths found. AI returned empty structure."
-            exit 0
-          fi
+          echo "$AI_TEXT" | jq -r '.files[].path' > file_list.txt
 
           echo "📄 Creating/Updating files..."
           while IFS= read -r FILEPATH; do
-            DIR=$(dirname "$FILEPATH")
-            mkdir -p "$DIR"
-            CONTENT=$(echo "$AI_TEXT" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content // \"\"")
-            echo "$CONTENT" > "$FILEPATH"
+            mkdir -p "$(dirname "$FILEPATH")"
+            CONTENT=$(echo "$AI_TEXT" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content")
+            printf "%s" "$CONTENT" > "$FILEPATH"
             echo "✔ Updated: $FILEPATH"
           done < file_list.txt
 
@@ -115,13 +112,16 @@ jobs:
           BRANCH="auto-pr-${{ github.event.issue.number }}"
           git checkout -b "$BRANCH" || git checkout "$BRANCH"
           git add .
+
           if git diff --cached --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
             echo "⚠️ No changes detected"
             exit 0
           fi
+
           git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
           git push origin "$BRANCH" --force
+
           echo "changed=true" >> $GITHUB_OUTPUT
           echo "✅ Changes committed & pushed"
 
