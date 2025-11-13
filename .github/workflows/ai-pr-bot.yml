@@ -1,7 +1,6 @@
----
 name: AI PR Bot Automation
 
-'on':
+on:
   issues:
     types: [opened, edited]
 
@@ -16,13 +15,9 @@ jobs:
       issues: read
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      # OIDC authentication (still required for your environment)
       - name: Authenticate with Google Cloud via OIDC
         uses: google-github-actions/auth@v2
         with:
@@ -30,49 +25,48 @@ jobs:
           service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
           token_format: access_token
 
-      - name: Set up Git Identity
+      - name: Configure Git Identity
         run: |
           git config --global user.name "AI Issue Bot"
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
-      # ================================
-      # MAIN AI STEP (SAFE, QUOTE-PROOF)
-      # ================================
-      - name: Run Gemini – Generate File Updates
+      - name: Run Gemini AI – Generate File Changes
         id: ai_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RAW_ISSUE: ${{ github.event.issue.body }}
         run: |
           set -euo pipefail
 
-          echo "🔥 Preparing safe issue text..."
+          echo "🔥 Preparing issue text safely..."
 
-          # Safely encode the issue body into JSON-safe format
-          ISSUE_JSON=$(jq -Rn --arg x "${{ github.event.issue.body }}" '$x')
+          # Encode issue securely (prevents jq errors)
+          ISSUE_B64=$(printf "%s" "$RAW_ISSUE" | base64 -w 0)
+          ISSUE_TEXT=$(printf "%s" "$ISSUE_B64" | base64 --decode)
 
-          echo "🧠 Building AI payload..."
+          echo "🔥 Calling Gemini..."
 
-          PAYLOAD=$(jq -n --arg msg "$ISSUE_JSON" '
+          # Build safe JSON for API
+          PAYLOAD=$(jq -n --arg msg "$ISSUE_TEXT" '
             {
               contents: [
                 {
                   parts: [
                     {
                       text:
-                        "You MUST respond ONLY with a valid JSON object.\n" +
-                        "Format:\n" +
-                        "{\"files\":[{\"path\":\"file\",\"action\":\"create|update|delete\",\"content\":\"text\"}]}\n" +
-                        "If no changes, return: {\"files\":[]}\n" +
-                        "No markdown. No comments. No natural language.\n" +
-                        "Issue: " + $msg
+                        "You are an AI GitHub Agent.\n" +
+                        "Read the issue and return ONLY VALID JSON.\n" +
+                        "NO markdown. NO comments. NO explanation.\n" +
+                        "You MUST return this format:\n" +
+                        "{\"files\":[{\"path\":\"path/to/file\",\"action\":\"create|update|delete\",\"content\":\"file text here\"}]}\n" +
+                        "If no changes needed, return {\"files\":[]}.\n" +
+                        "GitHub Issue:\n" + $msg
                     }
                   ]
                 }
               ]
             }
           ')
-
-          echo "🔥 Calling Gemini API..."
 
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
@@ -81,30 +75,30 @@ jobs:
 
           echo "$RESPONSE" > gemini_raw_response.json
 
-          # Extract AI text (safe)
           AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // "{}"')
 
           echo "$AI_TEXT" > AI_RESPONSE.txt
 
           echo "🔍 Validating JSON..."
+
           if ! echo "$AI_TEXT" | jq empty >/dev/null 2>&1; then
-            echo "❌ INVALID JSON from AI. Stopping safely."
+            echo "❌ INVALID JSON. Stopping safely."
             exit 0
           fi
 
-          echo "✅ JSON is valid."
-
           FILE_COUNT=$(echo "$AI_TEXT" | jq '.files | length')
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ AI returned no files to modify."
+            echo "⚠️ No files returned by AI."
             exit 0
           fi
 
           echo "$AI_TEXT" | jq -r '.files[] | @base64' > files64.txt
 
-          echo "📄 Applying file changes..."
+          echo "📄 Creating/Updating/Deleting files..."
+
           while IFS= read -r fb; do
             obj=$(echo "$fb" | base64 --decode)
+
             path=$(echo "$obj" | jq -r '.path')
             action=$(echo "$obj" | jq -r '.action')
             content=$(echo "$obj" | jq -r '.content // ""')
@@ -113,41 +107,54 @@ jobs:
               create|update)
                 mkdir -p "$(dirname "$path")"
                 printf "%s" "$content" > "$path"
-                echo "✔ Updated: $path"
+                echo "✔ Updated $path"
                 ;;
               delete)
                 rm -f "$path"
-                echo "🗑 Deleted: $path"
+                echo "🗑 Deleted $path"
                 ;;
               *)
-                echo "⚠️ Unknown action: $action (ignored)"
+                echo "⚠️ Unknown action for $path"
                 ;;
             esac
           done < files64.txt
 
-      - name: Add Bot Metadata
+      - name: Commit & Push Changes
+        id: commit_changes
         run: |
-          echo "Auto update at $(date)" >> AUTO_CHANGE_LOG.txt
+          BRANCH="auto-pr-${{ github.event.issue.number }}"
+          git checkout -b "$BRANCH" || git checkout "$BRANCH"
 
-      # ============================
-      #            PR
-      # ============================
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
+          git push origin "$BRANCH" --force
+
+          echo "changed=true" >> $GITHUB_OUTPUT
+
       - name: Create Pull Request
+        if: steps.commit_changes.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: auto-pr-${{ github.event.issue.number }}
           base: ${{ github.event.repository.default_branch }}
-          commit-message: "AI automated changes for Issue #${{ github.event.issue.number }}"
-          title: "AI PR Bot: Automated fix for Issue #${{ github.event.issue.number }}"
+          title: "AI PR Bot: Automated Fix for Issue #${{ github.event.issue.number }}"
           body: |
-            This PR was automatically generated using **Gemini 2.5 Flash AI**.
+            This PR was created automatically using **Gemini 2.5 Flash AI**.
 
-            ## Issue Content
+            ### Issue
             ```
             ${{ github.event.issue.body }}
             ```
 
-            🧠 AI analyzed the issue and updated files accordingly.
-
-            🚀 Powered by Gemini AI
+            ### Notes
+            - AI analyzed the repository
+            - Generated modifications
+            - Applied changes automatically
