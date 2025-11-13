@@ -40,7 +40,8 @@ jobs:
           ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
           echo "🔥 Sending request to Gemini AI..."
-
+          ISSUE_ESCAPED=$(printf '%s' "$ISSUE_TEXT" | jq -Rs .)
+          
           # ---------- FIXED PROMPT (Relaxed but safe) ----------
           PAYLOAD=$(cat <<EOF
           {
