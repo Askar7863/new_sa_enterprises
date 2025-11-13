@@ -1,6 +1,7 @@
+---
 name: AI PR Bot Automation
 
-on:
+'on':
   issues:
     types: [opened, edited]
 
@@ -129,38 +130,15 @@ jobs:
           echo "Auto update at $(date)" >> AUTO_CHANGE_LOG.txt
 
       # ============================
-      #           COMMIT
-      # ============================
-      - name: Commit & Push Changes
-        id: commit_changes
-        run: |
-          BRANCH="auto-pr-${{ github.event.issue.number }}"
-          git checkout -b "$BRANCH" || git checkout "$BRANCH"
-
-          git add .
-
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "⚠️ No changes detected."
-            exit 0
-          fi
-
-          git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
-          git push origin "$BRANCH" --force
-
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-          echo "✅ Changes committed & pushed"
-
-      # ============================
       #            PR
       # ============================
       - name: Create Pull Request
-        if: steps.commit_changes.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: auto-pr-${{ github.event.issue.number }}
           base: ${{ github.event.repository.default_branch }}
+          commit-message: "AI automated changes for Issue #${{ github.event.issue.number }}"
           title: "AI PR Bot: Automated fix for Issue #${{ github.event.issue.number }}"
           body: |
             This PR was automatically generated using **Gemini 2.5 Flash AI**.
