@@ -1,4 +1,4 @@
-name: AI PR Bot – Advanced Repo-Aware Developer
+name: ai-pr-bot-mode2
 
 on:
   issues:
@@ -13,10 +13,13 @@ permissions:
 jobs:
   ai_pr_bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Authenticate with Google Cloud via OIDC
         uses: google-github-actions/auth@v2
@@ -25,223 +28,213 @@ jobs:
           service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
           token_format: access_token
 
-      - name: Configure Git Identity
+      - name: Configure git
         run: |
           git config --global user.name "AI Issue Bot"
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
-      - name: Setup temp directory
-        run: mkdir -p .github/ai_tmp
+      - name: Prepare workspace
+        run: |
+          mkdir -p .github/ai_tmp
 
-      ###############################################################
-      # 1. Parse Intent From Issue
-      ###############################################################
       - name: Parse issue intent
-        id: intent
+        id: parse_intent
         env:
           ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
-          python3 << 'EOF'
-import json, os, re
-text = os.environ["ISSUE_TEXT"]
-
+          python3 - <<'PY'
+import os, re, json
+text = os.environ.get("ISSUE_TEXT","").strip()
 blocks = [b.strip() for b in re.split(r'\n-{3,}\n|\n\n+', text) if b.strip()]
 intent = {"commands": []}
-
 for b in blocks:
     lines = b.splitlines()
-    header = lines[0].strip()
-    desc = "\n".join(lines[1:]).strip()
+    header = lines[0].strip() if lines else ""
+    body = "\n".join(lines[1:]).strip()
     cmd = {}
-
     if header.lower().startswith("create file:"):
-        cmd["type"] = "create"
-        cmd["path"] = header.split(":",1)[1].strip()
+        cmd["type"]="create"
+        cmd["path"]=header.split(":",1)[1].strip()
     elif header.lower().startswith("modify file:"):
-        cmd["type"] = "modify"
-        cmd["path"] = header.split(":",1)[1].strip()
+        cmd["type"]="modify"
+        cmd["path"]=header.split(":",1)[1].strip()
     elif header.lower().startswith("delete file:"):
-        cmd["type"] = "delete"
-        cmd["path"] = header.split(":",1)[1].strip()
+        cmd["type"]="delete"
+        cmd["path"]=header.split(":",1)[1].strip()
     elif "analyze repo" in header.lower():
-        cmd["type"] = "analyze"
+        cmd["type"]="analyze"
+    elif header.lower().startswith("find function:"):
+        cmd["type"]="find"
+        cmd["target"]=header.split(":",1)[1].strip()
     else:
-        cmd["type"] = "unknown"
-    
-    allow = re.search(r'ALLOW_FAILING:\s*(true|false)', desc, re.I)
+        cmd["type"]="unknown"
+    allow = re.search(r'ALLOW_FAILING:\s*(true|false)', body, re.I)
     cmd["allow_failing"] = (allow.group(1).lower() == 'true') if allow else False
-    desc = re.sub(r'ALLOW_FAILING:.*', '', desc, flags=re.I).strip()
-
-    cmd["description"] = desc
+    cmd["description"] = re.sub(r'ALLOW_FAILING:.*','', body, flags=re.I).strip()
     intent["commands"].append(cmd)
-
 open(".github/ai_tmp/intent.json","w").write(json.dumps(intent))
-EOF
+print(json.dumps(intent))
+PY
 
-      ###############################################################
-      # 2. Create Repo Snapshot
-      ###############################################################
       - name: Build repo snapshot
         id: snapshot
         run: |
-          python3 << 'EOF'
+          python3 - <<'PY'
 import os, json, base64
-
-snapshot = []
-
+out=[]
+MAX_FULL=20000
+HEAD=8000
+TAIL=8000
 for root, dirs, files in os.walk("."):
-    if ".git" in root or "node_modules" in root or ".github/ai_tmp" in root:
+    if any(x in root for x in [".git", "node_modules", ".venv", "__pycache__", ".github/ai_tmp"]):
         continue
     for f in files:
-        path = os.path.join(root, f)
-        rel = path[2:]
+        p=os.path.join(root,f)
+        if p.startswith("./.git") or p.startswith("./node_modules") or p.startswith("./.github/ai_tmp"):
+            continue
+        rel=p[2:]
         try:
-            size = os.path.getsize(path)
+            size=os.path.getsize(p)
             if size > 2000000:
-                snapshot.append({"path": rel, "size": size, "mode": "skip"})
+                out.append({"path":rel,"size":size,"mode":"skip"})
                 continue
-            with open(path, "rb") as fh:
-                data = fh.read()
-            if size <= 20000:
-                snapshot.append({
-                    "path": rel,
-                    "size": size,
-                    "mode": "full",
-                    "content_b64": base64.b64encode(data).decode()
-                })
+            with open(p,"rb") as fh:
+                data=fh.read()
+            if size <= MAX_FULL:
+                out.append({"path":rel,"size":size,"mode":"full","preview_b64":base64.b64encode(data).decode()})
             else:
-                snapshot.append({
-                    "path": rel,
-                    "size": size,
-                    "mode": "preview",
-                    "content_b64": base64.b64encode(data[:8000] + b"\n---TRUNCATED---\n" + data[-8000:]).decode()
-                })
-        except:
-            snapshot.append({"path": rel, "mode": "error"})
+                head=data[:HEAD]
+                tail=data[-TAIL:] if len(data) > HEAD+TAIL else b""
+                preview=b"".join([head,b"\n---TRUNCATED---\n",tail])
+                out.append({"path":rel,"size":size,"mode":"preview","preview_b64":base64.b64encode(preview).decode()})
+        except Exception as e:
+            out.append({"path":rel,"mode":"error","note":str(e)})
+open(".github/ai_tmp/repo_snapshot.json","w").write(json.dumps(out))
+print("snapshot_written")
+PY
 
-open(".github/ai_tmp/snapshot.json","w").write(json.dumps(snapshot))
-EOF
-
-      ###############################################################
-      # 3. Build Request Payload
-      ###############################################################
       - name: Build Gemini payload
+        id: build_payload
         run: |
-          INSTRUCT="You are an AI Repo Developer. Only return valid JSON:\n\n{\"files\":[{\"path\":\"p\",\"action\":\"create|update|delete\",\"content_base64\":\"...\"}],\"summary\":\"text\"}\n\nModify only requested files unless ANALYZE repo is used."
-
-          SNAP=$(cat .github/ai_tmp/snapshot.json)
-          INTENT=$(cat .github/ai_tmp/intent.json)
+          INSTRUCT="You are an AI engineer. Respond ONLY with valid JSON matching: {\"files\":[{\"path\":\"...\",\"action\":\"create|update|delete\",\"content_base64\":\"...\"}],\"summary\":\"...\"}."
           ISSUE="${{ github.event.issue.body }}"
-
-          jq -n \
-            --arg instr "$INSTRUCT" \
-            --arg issue "$ISSUE" \
-            --arg intent "$INTENT" \
-            --arg snapshot "$SNAP" \
-            '{contents:[{parts:[{text:$instr},{text:"### INTENT\n"},{text:$intent},{text:"### ISSUE\n"},{text:$issue},{text:"### SNAPSHOT\n"},{text:$snapshot}]}]}' \
+          INTENT=$(cat .github/ai_tmp/intent.json)
+          SNAPSHOT=$(cat .github/ai_tmp/repo_snapshot.json)
+          jq -n --arg instr "$INSTRUCT" --arg issue "$ISSUE" --arg intent "$INTENT" --arg snap "$SNAPSHOT" \
+            '{contents:[{parts:[{text:$instr},{text:"### INTENT\n"},{text:$intent},{text:"### ISSUE\n"},{text:$issue},{text:"### SNAPSHOT\n"},{text:$snap}]}]}' \
             > .github/ai_tmp/payload.json
+          echo "payload_ready"
 
-      ###############################################################
-      # 4. Call Gemini With Retry
-      ###############################################################
-      - name: Call Gemini
-        id: call
+      - name: Call Gemini (retry)
+        id: call_gemini
         run: |
           TOKEN=$(gcloud auth print-access-token)
-          ATTEMPTS=3
-
-          for i in $(seq 1 $ATTEMPTS); do
-            echo "Attempt $i..."
-            curl -s -X POST \
-              -H "Authorization: Bearer $TOKEN" \
-              -H "Content-Type: application/json" \
-              -d @.github/ai_tmp/payload.json \
-              "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" \
-              > .github/ai_tmp/response_raw.json
-
-            TEXT=$(jq -r '.candidates[0].content.parts[0].text // ""' .github/ai_tmp/response_raw.json)
-
-            echo "$TEXT" > .github/ai_tmp/text.txt
-
-            # Extract JSON
-            JSON=$(echo "$TEXT" | sed -n '/{/,/}/p')
-
-            if echo "$JSON" | jq empty; then
-              echo "$JSON" > .github/ai_tmp/ai.json
-              exit 0
+          PAYLOAD=.github/ai_tmp/payload.json
+          RAW=.github/ai_tmp/gemini_raw.json
+          TXT=.github/ai_tmp/ai_text.txt
+          CLEAN=.github/ai_tmp/ai.json
+          MAX=3
+          i=0
+          while [ $i -lt $MAX ]; do
+            i=$((i+1))
+            echo "call attempt $i"
+            curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d @"$PAYLOAD" "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" > "$RAW" || true
+            # try to extract the AI text safely
+            txt=$(jq -r '.candidates[0].content.parts[0].text // ""' "$RAW" 2>/dev/null || echo "")
+            echo "$txt" > "$TXT"
+            # try to grab first JSON block
+            json_block=$(echo "$txt" | awk 'BEGIN{in=0} { if(in==0 && match($0,/^\s*{/)){in=1; s=$0; next} if(in==1){ s=s "\n" $0; if(match($0,/^\s*}$/)){ print s; exit }}}')
+            if [ -z "$json_block" ]; then
+              json_block="$txt"
+            fi
+            if echo "$json_block" | jq empty >/dev/null 2>&1; then
+              echo "$json_block" > "$CLEAN"
+              echo "valid_json=1" > .github/ai_tmp/flags
+              break
+            else
+              echo "invalid json on attempt $i"
+              sleep 2
             fi
           done
+          if [ ! -f "$CLEAN" ]; then
+            echo "failed=true" > .github/ai_tmp/flags
+          fi
 
-          echo "FAILED" > .github/ai_tmp/failflag
-
-      ###############################################################
-      # 5. Apply File Changes
-      ###############################################################
-      - name: Apply file changes
-        if: ${{ !contains(steps.call.outputs.failure, 'true') }}
-        id: apply
+      - name: Apply AI changes
+        id: apply_changes
         run: |
+          FLAGS=".github/ai_tmp/flags"
+          if [ -f "$FLAGS" ] && grep -q "failed=true" "$FLAGS"; then
+            echo "No valid AI JSON produced. Exiting."
+            echo "changed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           JSON=".github/ai_tmp/ai.json"
-
           if [ ! -f "$JSON" ]; then
             echo "changed=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          COUNT=$(jq '.files | length' "$JSON")
-          if [ "$COUNT" -eq 0 ]; then
+          count=$(jq '.files | length' "$JSON" 2>/dev/null || echo 0)
+          if [ "$count" -eq 0 ]; then
             echo "changed=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          jq -c '.files[]' "$JSON" | while read row; do
-            path=$(echo $row | jq -r '.path')
-            action=$(echo $row | jq -r '.action')
-            content=$(echo $row | jq -r '.content_base64 // ""')
-
-            case $action in
+          changed=false
+          jq -c '.files[]' "$JSON" | while read -r item; do
+            path=$(echo "$item" | jq -r '.path')
+            action=$(echo "$item" | jq -r '.action')
+            content_b64=$(echo "$item" | jq -r '.content_base64 // ""')
+            case "$action" in
               create|update)
                 mkdir -p "$(dirname "$path")"
-                echo "$content" | base64 --decode > "$path"
+                echo "$content_b64" | base64 --decode > "$path"
+                echo "applied $action $path"
+                changed=true
                 ;;
               delete)
-                rm -f "$path"
+                rm -f "$path" && echo "deleted $path" || echo "delete missing $path"
+                changed=true
+                ;;
+              *)
+                echo "unknown action $action for $path"
                 ;;
             esac
           done
+          if [ "$changed" = true ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
 
-          echo "changed=true" >> $GITHUB_OUTPUT
-
-      ###############################################################
-      # 6. Commit + PR
-      ###############################################################
-      - name: Commit and push
-        if: steps.apply.outputs.changed == 'true'
+      - name: Commit & push
+        if: steps.apply_changes.outputs.changed == 'true'
         id: commit
         run: |
           BR="auto-pr-${{ github.event.issue.number }}"
           git checkout -b "$BR" || git checkout "$BR"
           git add -A
-          git commit -m "AI auto fixes issue #${{ github.event.issue.number }}"
+          if git diff --cached --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
           git push origin "$BR" --force
+          echo "changed=true" >> $GITHUB_OUTPUT
 
-      - name: Create Pull Request
-        if: steps.commit.outputs.changed != 'false'
+      - name: Create PR
+        if: steps.commit.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: auto-pr-${{ github.event.issue.number }}
           base: ${{ github.event.repository.default_branch }}
-          title: "AI Fix for Issue #${{ github.event.issue.number }}"
+          title: "AI PR Bot: Automated Fix for Issue #${{ github.event.issue.number }}"
           body: |
-            Automated fix generated by Gemini AI.
+            This PR was generated automatically by AI.
 
-      ###############################################################
-      # 7. Upload Debug Logs
-      ###############################################################
-      - name: Upload debug logs
+      - name: Upload debug
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug
+          name: ai-debug
           path: .github/ai_tmp
