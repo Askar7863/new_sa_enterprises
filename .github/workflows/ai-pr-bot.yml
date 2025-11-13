@@ -40,32 +40,15 @@ jobs:
           echo "🔥 Preparing issue text safely..."
           ISSUE_TEXT="$RAW_ISSUE"
 
-          echo "🔥 Building payload safely..."
-          PAYLOAD=$(jq -n --arg msg "$ISSUE_TEXT" '
-            {
-              contents: [
-                {
-                  parts: [
-                    {
-                      text: (
-" You are an AI GitHub Agent.
-Only return valid JSON.
-Format:
-{
-  \"files\": [
-    {\"path\": \"file\", \"action\": \"create|update|delete\", \"content\": \"text\"}
-  ]
-}
-If no changes needed, return {\"files\":[]}.
-GitHub Issue:
-" + $msg
-                      )
-                    }
-                  ]
-                }
-              ]
-            }
-          ')
+          echo "🔥 Building instruction and payload safely..."
+          # Build a stable instruction string in a bash variable (no jq concatenation, no +)
+          INSTRUCT=$'You are an AI GitHub Agent.\nRespond ONLY with valid JSON.\nFormat:\n{\"files\":[{\"path\":\"file\",\"action\":\"create|update|delete\",\"content\":\"text\"}]}\nIf no changes needed, return {\"files\":[]}.\nGitHub Issue:\n'
+
+          # Combine instruction + issue text into one variable
+          COMBINED="${INSTRUCT}${ISSUE_TEXT}"
+
+          # Safely build JSON payload using jq with --arg (avoids quoting/concat issues)
+          PAYLOAD=$(jq -n --arg text "$COMBINED" '{contents:[{parts:[{text:$text}]}]}')
 
           echo "🔥 Calling Gemini..."
           RESPONSE=$(curl -s -X POST \
