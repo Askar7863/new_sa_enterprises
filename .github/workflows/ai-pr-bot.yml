@@ -21,7 +21,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Still required (OIDC → GCP), but NOT used for Gemini API anymore
+      # OIDC still needed, but NOT used for Gemini
       - name: Authenticate with Google Cloud via OIDC
         uses: google-github-actions/auth@v2
         with:
@@ -34,28 +34,30 @@ jobs:
           git config --global user.name "AI Issue Bot"
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
-      # ---------------------------
-      # MAIN AI PROCESSING STEP
-      # ---------------------------
-      - name: Run Gemini – Analyze Issue, Fix Code, Generate Files
+      # ===============================
+      #  AI SECTION – SAFE, ERROR-PROOF
+      # ===============================
+      - name: Run Gemini – Generate File Changes
         id: ai_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
-          echo "🔥 Sending issue request to Gemini AI..."
+          echo "🔥 Sending request to Gemini AI..."
 
+          # Strict instructions for JSON generation
           PAYLOAD=$(cat <<EOF
           {
             "contents": [{
               "parts": [{
-                "text": "You are an AI GitHub automation bot. Read this issue and do EXACTLY the following:\n\n1. Analyze the user's request.\n2. Fix or modify any existing files if required.\n3. If the issue requests new code, generate it.\n4. If the issue requests file changes, output EXACT file paths + corrected content.\n5. Return ONLY structured JSON format like this:\n{\n \"files\": [\n   { \"path\": \"src/example.js\", \"content\": \"file text here\" },\n   { \"path\": \"README.md\", \"content\": \"updated readme\" }\n ]\n}\n\nHere is the issue:\n$ISSUE_TEXT"
+                "text": "You MUST output STRICT JSON ONLY.\n\nNO explanation. NO markdown. NO extra text.\n\nIf you need to change files, return:\n{\n  \"files\": [\n    { \"path\": \"file1\", \"content\": \"...\" },\n    { \"path\": \"dir/file2\", \"content\": \"...\" }\n  ]\n}\n\nIf you cannot create files, return:\n{\"files\": []}\n\nNow read this issue and generate ONLY the required files:\n--- ISSUE START ---\n$ISSUE_TEXT\n--- ISSUE END ---"
               }]
             }]
           }
           EOF
           )
 
+          # Call Gemini API
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
@@ -63,14 +65,33 @@ jobs:
 
           echo "$RESPONSE" > gemini_raw_response.json
 
+          # Extract only returned text
           AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text')
 
           echo "$AI_TEXT" > AI_RESPONSE.txt
 
-          echo "🔍 Parsing AI JSON output..."
+          echo "🔍 Validating JSON output..."
 
-          echo "$AI_TEXT" | jq -r '.files[] | "\(.path)"' > file_list.txt
+          # Validate JSON first
+          echo "$AI_TEXT" | jq empty 2>/dev/null
+          if [ $? -ne 0 ]; then
+            echo "❌ AI did NOT return valid JSON."
+            echo "Raw output saved in AI_RESPONSE.txt"
+            exit 0   # Do NOT fail the workflow
+          fi
 
+          echo "✅ JSON is valid."
+
+          # Extract file paths safely
+          echo "$AI_TEXT" | jq -r '.files[].path' > file_list.txt
+
+          # If empty, stop gracefully
+          if [ ! -s file_list.txt ]; then
+            echo "⚠️ AI returned an empty file list"
+            exit 0
+          fi
+
+          # Create/update files
           while IFS= read -r FILEPATH; do
             DIR=$(dirname "$FILEPATH")
             mkdir -p "$DIR"
@@ -81,16 +102,17 @@ jobs:
             echo "📄 Generated/Updated: $FILEPATH"
           done < file_list.txt
 
-      # Extra logging or files if you want
+      # Add metadata
       - name: Add Bot Metadata
         run: |
           echo "Auto update at $(date)" >> AUTO_CHANGE_LOG.txt
 
-      - name: Commit & push changes
+      # ================================
+      # COMMIT + PR CREATION
+      # ================================
+      - name: Commit & Push Changes
         id: commit_changes
         run: |
-          set -e
-
           BRANCH="auto-pr-${{ github.event.issue.number }}"
           git checkout -b "$BRANCH" || git checkout "$BRANCH"
 
@@ -98,13 +120,14 @@ jobs:
 
           if git diff --cached --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
-            echo "⚠️ No changes created by AI"
-          else
-            git commit -m "AI: Automated changes for Issue #${{ github.event.issue.number }}"
-            git push origin "$BRANCH" --force
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "✅ Changes committed"
+            echo "⚠️ No changes detected"
+            exit 0
           fi
+
+          git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
+          git push origin "$BRANCH" --force
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "✅ Changes committed"
 
       - name: Create Pull Request
         if: steps.commit_changes.outputs.changed == 'true'
@@ -115,15 +138,16 @@ jobs:
           base: ${{ github.event.repository.default_branch }}
           title: "AI PR Bot: Fix for Issue #${{ github.event.issue.number }}"
           body: |
-            This PR was automatically created using **Gemini AI**.
-            
-            ### Issue content:
+            This PR was automatically created using **Gemini 2.5 Flash AI**.
+
+            ## Issue Content
             ```
             ${{ github.event.issue.body }}
             ```
 
-            ### AI Output Summary:
-            - Files were added or modified based on your request.
-            - See commit diff for details.
+            ### Bot Notes
+            - AI parsed your issue
+            - Generated/updated code files
+            - Created this PR automatically
 
-            ⚡ Generated by AI PR Bot
+            🚀 Powered by Gemini AI
