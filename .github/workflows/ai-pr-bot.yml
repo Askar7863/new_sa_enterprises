@@ -34,24 +34,25 @@ jobs:
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
       # ======================================================
-      #  SAFE AI SECTION (BASE64 FIX ADDED)
+      #  SAFE AI SECTION (BASE64 FIX APPLIED)
       # ======================================================
       - name: Run Gemini – Generate File Changes
         id: ai_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ISSUE_BASE64: ${{ github.event.issue.body | toJSON | base64 }}
+          ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
           echo "🔥 Sending request to Gemini AI..."
 
-          # SAFELY decode issue text
-          ISSUE_TEXT=$(echo "$ISSUE_BASE64" | base64 --decode)
+          # Encode issue body safely
+          ISSUE_SAFE=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
+          DEC_ISSUE=$(printf "%s" "$ISSUE_SAFE" | base64 --decode)
 
           PAYLOAD=$(cat <<EOF
           {
             "contents": [{
               "parts": [{
-                "text": "You MUST output STRICT JSON ONLY. No markdown, no prose.\n\nFormat:\n{\n  \"files\": [\n    {\"path\": \"filepath\", \"content\": \"file content\"}\n  ]\n}\n\nIf nothing needs to be changed, return:\n{\"files\": []}\n\n--- ISSUE ---\n$ISSUE_TEXT\n--- END ISSUE ---"
+                "text": "You MUST output STRICT JSON ONLY. No markdown, no prose.\n\nFormat:\n{\n  \"files\": [\n    {\"path\": \"filepath\", \"content\": \"file content\"}\n  ]\n}\n\nIf nothing needs to be changed, return:\n{\"files\": []}\n\n--- ISSUE ---\n$DEC_ISSUE\n--- END ISSUE ---"
               }]
             }]
           }
@@ -65,7 +66,6 @@ jobs:
 
           echo "$RESPONSE" > gemini_raw_response.json
 
-          # Extract pure AI text
           AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
 
           if [ -z "$AI_TEXT" ]; then
@@ -76,8 +76,6 @@ jobs:
           echo "$AI_TEXT" > AI_RESPONSE.txt
 
           echo "🔍 Validating JSON..."
-
-          # Validate JSON
           echo "$AI_TEXT" | jq empty 2>/dev/null
           if [ $? -ne 0 ]; then
             echo "❌ INVALID JSON from AI. Check AI_RESPONSE.txt"
@@ -151,10 +149,5 @@ jobs:
             ```
             ${{ github.event.issue.body }}
             ```
-
-            ### Bot Notes
-            - AI parsed your issue
-            - Generated/updated repo files
-            - Opened this Pull Request
 
             🚀 Powered by **Gemini AI**
