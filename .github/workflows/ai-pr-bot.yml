@@ -1,26 +1,67 @@
+name: AI PR Bot Automation
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  ai_pr_bot:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+      issues: read
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Authenticate with Google Cloud via OIDC
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: "projects/314154954531/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
+          service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
+          token_format: access_token
+
+      - name: Set up Git Identity
+        run: |
+          git config --global user.name "AI Issue Bot"
+          git config --global user.email "ai-issue-bot@users.noreply.github.com"
+
+      # ======================================================
+      #               SAFE AI SECTION (NO FAILURES)
+      # ======================================================
       - name: Run Gemini – Generate File Changes
         id: ai_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
-          echo "🔥 Asking Gemini for file changes..."
+          set -euo pipefail
 
+          echo "🔥 Sending request to Gemini AI..."
+
+          # Base64 safe encoding
           SAFE_ISSUE=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
           DEC_ISSUE=$(printf "%s" "$SAFE_ISSUE" | base64 --decode)
 
-          # --- BEST-POSSIBLE PROMPT (Gemini always obeys) ---
+          # ---------- BEST PROMPT FOR GEMINI ----------
           PAYLOAD=$(cat <<EOF
           {
             "contents": [{
               "parts": [{
-                "text": "Return ONLY JSON.\nNo markdown. No text.\nFormat example:\n{\"files\":[{\"path\":\"file\",\"content\":\"text\"}]}\nIf no edits needed, return {\"files\":[]}.\nIssue:\n$DEC_ISSUE"
+                "text": "Return ONLY valid JSON with no markdown.\nFormat: {\"files\":[{\"path\":\"file\",\"content\":\"text\"}]}\nIf no edits needed, return {\"files\":[]}.\nIssue:\n$DEC_ISSUE"
               }]
             }]
           }
           EOF
           )
-          # --------------------------------------------------
+          # -------------------------------------------------
 
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
@@ -32,13 +73,13 @@
           RAW_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // ""')
 
           if [ -z "$RAW_TEXT" ]; then
-            echo "⚠️ EMPTY RESPONSE → fallback"
+            echo "⚠️ Gemini returned empty → using fallback JSON"
             RAW_TEXT='{"files":[]}'
           fi
 
           echo "$RAW_TEXT" > AI_RAW.txt
 
-          # --- EXTRACT JSON FROM ANY GARBAGE ---
+          # -------- CLEAN JSON EXTRACTION --------
           CLEANED=$(echo "$RAW_TEXT" | sed -n 's/.*\({.*}\).*/\1/p')
 
           if [ -z "$CLEANED" ]; then
@@ -46,30 +87,70 @@
             CLEANED='{"files":[]}'
           fi
 
-          echo "$CLEANED" > AI_RESPONSE.txt
-
-          # --- Validate JSON ---
+          # Validate JSON
           if ! echo "$CLEANED" | jq empty >/dev/null 2>&1; then
             echo "⚠️ Invalid JSON → fallback"
             CLEANED='{"files":[]}'
-            echo "$CLEANED" > AI_RESPONSE.txt
           fi
 
-          echo "✅ JSON cleaned and validated."
+          echo "$CLEANED" > AI_RESPONSE.txt
+          echo "✅ JSON cleaned & validated."
 
           FILE_COUNT=$(echo "$CLEANED" | jq '.files | length')
 
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ No files to create."
+            echo "⚠️ AI returned no files to modify."
             exit 0
           fi
 
           echo "$CLEANED" | jq -r '.files[].path' > file_list.txt
 
-          echo "📄 Writing files..."
+          echo "📄 Creating/Updating files..."
           while IFS= read -r FILEPATH; do
             mkdir -p "$(dirname "$FILEPATH")"
             CONTENT=$(echo "$CLEANED" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content")
             printf "%s" "$CONTENT" > "$FILEPATH"
             echo "✔ Updated: $FILEPATH"
           done < file_list.txt
+
+      - name: Add Bot Metadata
+        run: |
+          echo "Auto update at $(date)" >> AUTO_CHANGE_LOG.txt
+
+      # ======================================================
+      #              GIT COMMIT + OPEN PR
+      # ======================================================
+      - name: Commit & Push Changes
+        id: commit_changes
+        run: |
+          BRANCH="auto-pr-${{ github.event.issue.number }}"
+          git checkout -b "$BRANCH" || git checkout "$BRANCH"
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No changes detected"
+            exit 0
+          fi
+
+          git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
+          git push origin "$BRANCH" --force
+          echo "changed=true" >> $GITHUB_OUTPUT
+
+      - name: Create Pull Request
+        if: steps.commit_changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: auto-pr-${{ github.event.issue.number }}
+          base: ${{ github.event.repository.default_branch }}
+          title: "AI PR Bot: Fix for Issue #${{ github.event.issue.number }}"
+          body: |
+            This PR was automatically generated using **Gemini 2.5 Flash AI**.
+
+            ## Issue Content
+            ```
+            ${{ github.event.issue.body }}
+            ```
+
+            🚀 Powered by **Gemini AI**
