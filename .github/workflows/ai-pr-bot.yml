@@ -21,7 +21,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # OIDC (not needed for Gemini, but fine to keep for future)
+      # OIDC still needed (but NOT used by Gemini)
       - name: Authenticate with Google Cloud via OIDC
         uses: google-github-actions/auth@v2
         with:
@@ -35,31 +35,27 @@ jobs:
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
       # ======================================================
-      # SAFE, BASE64-PROTECTED, NULL-PROOF GEMINI AI STEP
+      #  SAFE AI SECTION (NULL-PROOF, STRICT JSON, NO FAILURES)
       # ======================================================
       - name: Run Gemini – Generate File Changes
         id: ai_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ISSUE_BASE64: ${{ github.event.issue.body | toJSON | base64 }}
+          ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
           echo "🔥 Sending request to Gemini AI..."
-
-          # decode safely — prevents JSON breaking due to quotes, emojis, code blocks
-          ISSUE_TEXT=$(echo "$ISSUE_BASE64" | base64 --decode)
 
           PAYLOAD=$(cat <<EOF
           {
             "contents": [{
               "parts": [{
-                "text": "You MUST output STRICT JSON ONLY.\n\nNo markdown, no explanation.\n\nFormat:\n{\n  \"files\": [\n    {\"path\": \"file\", \"content\": \"text\"}\n  ]\n}\n\nIf you cannot generate files, return:\n{\"files\": []}\n\n--- ISSUE CONTENT START ---\n$ISSUE_TEXT\n--- ISSUE CONTENT END ---"
+                "text": "You MUST output STRICT JSON ONLY. No markdown, no prose.\n\nFormat:\n{\n  \"files\": [\n    {\"path\": \"filepath\", \"content\": \"file content\"}\n  ]\n}\n\nIf nothing needs to be changed, return:\n{\"files\": []}\n\n--- ISSUE ---\n$ISSUE_TEXT\n--- END ISSUE ---"
               }]
             }]
           }
           EOF
           )
 
-          # Call Gemini
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
@@ -67,7 +63,7 @@ jobs:
 
           echo "$RESPONSE" > gemini_raw_response.json
 
-          # Extract ONLY the generated text
+          # Extract pure AI text
           AI_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
 
           if [ -z "$AI_TEXT" ]; then
@@ -77,34 +73,36 @@ jobs:
 
           echo "$AI_TEXT" > AI_RESPONSE.txt
 
-          # Validate JSON
+          echo "🔍 Validating JSON..."
+
+          # Validate JSON before using it
           echo "$AI_TEXT" | jq empty 2>/dev/null
           if [ $? -ne 0 ]; then
-            echo "❌ INVALID JSON returned. Stopping safely. Check AI_RESPONSE.txt"
+            echo "❌ INVALID JSON from AI. Check AI_RESPONSE.txt"
             exit 0
           fi
 
-          echo "✅ JSON validated."
+          echo "✅ JSON is valid."
 
-          # Null-safe file count
+          # NULL-SAFE extraction of files array
           FILE_COUNT=$(echo "$AI_TEXT" | jq '.files // [] | length')
 
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ No files returned by AI."
+            echo "⚠️ AI returned no files to modify."
             exit 0
           fi
 
-          # Extract file paths
+          # Extract file paths safely
           echo "$AI_TEXT" | jq -r '.files // [] | .[].path' > file_list.txt
 
           if [ ! -s file_list.txt ]; then
-            echo "⚠️ No file paths found."
+            echo "⚠️ No paths found. AI returned empty structure."
             exit 0
           fi
 
-          echo "📄 Generating files..."
+          echo "📄 Creating/Updating files..."
 
-          # Create each file
+          # Create or update files from AI output
           while IFS= read -r FILEPATH; do
             DIR=$(dirname "$FILEPATH")
             mkdir -p "$DIR"
@@ -119,9 +117,9 @@ jobs:
         run: |
           echo "Auto update at $(date)" >> AUTO_CHANGE_LOG.txt
 
-      # ======================================================
+      # ==========================
       # COMMIT + PUSH + PR CREATION
-      # ======================================================
+      # ==========================
       - name: Commit & Push Changes
         id: commit_changes
         run: |
@@ -132,7 +130,7 @@ jobs:
 
           if git diff --cached --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
-            echo "⚠️ No changes to commit."
+            echo "⚠️ No changes detected"
             exit 0
           fi
 
@@ -140,7 +138,7 @@ jobs:
           git push origin "$BRANCH" --force
 
           echo "changed=true" >> $GITHUB_OUTPUT
-          echo "✅ Changes committed & pushed."
+          echo "✅ Changes committed & pushed"
 
       - name: Create Pull Request
         if: steps.commit_changes.outputs.changed == 'true'
@@ -153,14 +151,15 @@ jobs:
           body: |
             This PR was automatically generated using **Gemini 2.5 Flash AI**.
 
-            ## Issue
+            ## Issue Content
             ```
             ${{ github.event.issue.body }}
             ```
 
-            ## Bot Output
-            ✔ Code analyzed  
-            ✔ Files updated  
-            ✔ Pull request created  
+            ### Bot Notes
+            - AI parsed your issue
+            - Generated/updated repo files
+            - Opened this Pull Request
 
             🚀 Powered by **Gemini AI**
+
