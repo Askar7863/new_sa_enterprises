@@ -49,31 +49,31 @@ jobs:
 
           echo "🧠 Preparing JSON payload…"
 
-          # Build JSON using jq (NO HEREDOC → NO YAML ERRORS)
           PAYLOAD=$(jq -n --arg issue "$ISSUE" '
-            {
-              contents: [
-                {
-                  parts: [
-                    {
-                      text:
-                        "You are an AI GitHub Automation Agent.\n" +
-                        "Analyse the issue.\n" +
-                        "Modify code.\n" +
-                        "Add files.\n" +
-                        "Delete files.\n" +
-                        "Refactor intelligently.\n" +
-                        "Return STRICT JSON ONLY.\n\n" +
-                        "FORMAT:\n" +
-                        "{\"files\":[{\"path\":\"path\",\"action\":\"create|update|delete\",\"content\":\"text\"}]}\n" +
-                        "If no changes: {\"files\":[]}\n\n" +
-                        "ISSUE:\n" + $issue
-                    }
-                  ]
-                }
-              ]
-            }
-          ')
+  {
+    contents: [
+      {
+        parts: [
+          {
+            text:
+              "You are an AI GitHub Automation Agent.\n" +
+              "Analyse the issue.\n" +
+              "Modify code.\n" +
+              "Add files.\n" +
+              "Delete files.\n" +
+              "Refactor intelligently.\n" +
+              "Return STRICT JSON ONLY.\n\n" +
+              "FORMAT:\n" +
+              "{\"files\":[{\"path\":\"path\",\"action\":\"create|update|delete\",\"content\":\"text\"}]}\n" +
+              "If no changes: {\"files\":[]}\n\n" +
+              "ISSUE:\n" + $issue
+          }
+        ]
+      }
+    ]
+  }
+')
+
 
           echo "$PAYLOAD" > payload.json
 
