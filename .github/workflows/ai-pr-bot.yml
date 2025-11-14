@@ -41,44 +41,41 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "🔥 Starting Gemini AI Agent…"
+          echo "🔥 Starting Gemini Agent"
 
-          ISSUE_SAFE=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
-          DEC_ISSUE=$(printf "%s" "$ISSUE_SAFE" | base64 --decode)
+          # Safely encode issue
+          SAFE=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
+          ISSUE=$(printf "%s" "$SAFE" | base64 --decode)
 
-          echo "🧠 Building Agent Prompt…"
+          echo "🧠 Preparing JSON payload…"
 
-          PAYLOAD=$(cat <<'EOF'
-{
-  "contents": [
-    {
-      "parts": [
-        {
-          "text": ""
-        }
-      ]
-    }
-  ]
-}
-EOF
-)
+          # Build JSON using jq (NO HEREDOC → NO YAML ERRORS)
+          PAYLOAD=$(jq -n --arg issue "$ISSUE" '
+            {
+              contents: [
+                {
+                  parts: [
+                    {
+                      text:
+                        "You are an AI GitHub Automation Agent.\n" +
+                        "Analyse the issue.\n" +
+                        "Modify code.\n" +
+                        "Add files.\n" +
+                        "Delete files.\n" +
+                        "Refactor intelligently.\n" +
+                        "Return STRICT JSON ONLY.\n\n" +
+                        "FORMAT:\n" +
+                        "{\"files\":[{\"path\":\"path\",\"action\":\"create|update|delete\",\"content\":\"text\"}]}\n" +
+                        "If no changes: {\"files\":[]}\n\n" +
+                        "ISSUE:\n" + $issue
+                    }
+                  ]
+                }
+              ]
+            }
+          ')
 
-          # Insert the decoded issue dynamically
-          PAYLOAD=$(echo "$PAYLOAD" | jq --arg issue "$DEC_ISSUE" \
-            '.contents[0].parts[0].text = 
-            "You are an AI GitHub Automation Agent.\n
-             Analyse the issue.\n
-             Modify existing code.\n
-             Add new files.\n
-             Delete files.\n
-             Refactor code.\n
-             Output STRICT JSON ONLY.\n
-             
-             FORMAT:\n
-             {\"files\": [{\"path\":\"path/to/file\",\"action\":\"create|update|delete\",\"content\":\"text\"}]}\n
-             If no changes: {\"files\":[]}\n
-             
-             ISSUE:\n" + $issue')
+          echo "$PAYLOAD" > payload.json
 
           echo "🔥 Calling Gemini API…"
 
@@ -92,38 +89,37 @@ EOF
           RAW=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // ""')
 
           if [ -z "$RAW" ]; then
-            echo "⚠️ Gemini returned empty. Using fallback."
+            echo "⚠️ Empty response — using fallback"
             RAW='{"files":[]}'
           fi
 
-          echo "$RAW" > AI_RAW.txt
-
+          # Clean JSON
           if echo "$RAW" | jq empty >/dev/null 2>&1; then
             CLEAN="$RAW"
           else
-            CLEAN=$(printf "%s" "$RAW" | sed -n 's/.*\({.*}\).*/\1/p' || true)
-            if [ -z "$CLEAN" ] || ! echo "$CLEAN" | jq empty >/dev/null 2>&1; then
-              echo "⚠️ Could not parse JSON. Fallback used."
+            CLEAN=$(printf "%s" "$RAW" | sed -n 's/.*\({.*}\).*/\1/p')
+            if ! echo "$CLEAN" | jq empty >/dev/null 2>&1; then
               CLEAN='{"files":[]}'
             fi
           fi
 
-          echo "$CLEAN" > AI_RESPONSE.txt
+          echo "$CLEAN" > AI_RESPONSE.json
 
           FILE_COUNT=$(echo "$CLEAN" | jq '.files | length')
 
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ No file actions. Exiting."
+            echo "⚠️ No modifications requested."
             exit 0
           fi
 
-          echo "$CLEAN" | jq -r '.files[].path' > file_list.txt
+          echo "📄 Applying file changes…"
 
-          echo "📄 Executing AI file operations…"
+          echo "$CLEAN" | jq -c '.files[]' > file_actions.jsonl
 
-          while IFS= read -r FILEPATH; do
-            ACTION=$(echo "$CLEAN" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .action")
-            CONTENT=$(echo "$CLEAN" | jq -r ".files[] | select(.path==\"$FILEPATH\") | .content // \"\"")
+          while IFS= read -r row; do
+            FILEPATH=$(echo "$row" | jq -r '.path')
+            ACTION=$(echo "$row" | jq -r '.action')
+            CONTENT=$(echo "$row" | jq -r '.content')
 
             case "$ACTION" in
               create|update)
@@ -136,15 +132,12 @@ EOF
                 echo "🗑 Deleted → $FILEPATH"
                 ;;
             esac
-          done < file_list.txt
 
-      - name: Add Bot Metadata
-        run: echo "Last AI update: $(date)" >> AI_METADATA.log
+          done < file_actions.jsonl
 
       - name: Commit & Push Changes
         id: commit_changes
         run: |
-          set -euo pipefail
           BRANCH="ai-agent-${{ github.event.issue.number }}"
           git checkout -b "$BRANCH" || git checkout "$BRANCH"
           git add .
@@ -152,7 +145,7 @@ EOF
             echo "changed=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-          git commit -m "AI Agent: Automated changes for Issue #${{ github.event.issue.number }}"
+          git commit -m "AI Agent: Automated changes for issue #${{ github.event.issue.number }}"
           git push origin "$BRANCH" --force
           echo "changed=true" >> $GITHUB_OUTPUT
 
@@ -165,14 +158,11 @@ EOF
           base: ${{ github.event.repository.default_branch }}
           title: "AI Agent PR – Issue #${{ github.event.issue.number }}"
           body: |
-            AI Agent has analyzed the issue and performed automated file operations.
+            AI Agent has analyzed the issue and created/update files.
 
             ## Issue
             ```
             ${{ github.event.issue.body }}
             ```
 
-            ## Notes
-            - Smart file creation, updating, deletion
-            - Automatic PR creation
-            - Powered by Gemini 2.5 Flash
+            Powered by Gemini 2.5 Flash 🚀
