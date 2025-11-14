@@ -1,4 +1,4 @@
-name: AI PR Bot - Bootstrap
+name: ai-pr-bot
 
 on:
   issues:
@@ -11,50 +11,29 @@ permissions:
   issues: write
 
 jobs:
-  ai_pr_bot:
+  ai-pr-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Authenticate with Google Cloud via OIDC
+      - name: Authenticate with Google OIDC
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: "projects/314154954531/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
           service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
           token_format: access_token
 
-      - name: Configure git identity
+      - name: Run AI PR Bot
         run: |
-          git config --global user.name "AI Issue Bot"
-          git config --global user.email "ai-issue-bot@users.noreply.github.com"
+          python3 .github/ai_pr_bot/main.py \
+            "${{ github.event.issue.number }}" \
+            "${{ github.event.issue.body }}"
 
-      - name: Create workspace and print context
-        run: |
-          set -euo pipefail
-          mkdir -p .github/ai_tmp
-          echo "Issue body:"
-          echo "----------"
-          echo "${{ github.event.issue.body }}"
-          echo "----------"
-          # show that gcloud auth works (prints token length only for safety)
-          if command -v gcloud >/dev/null 2>&1; then
-            TOK=$(gcloud auth print-access-token 2>/dev/null || true)
-            if [ -n "$TOK" ]; then
-              echo "gcloud token present (length: $(printf '%s' \"$TOK\" | wc -c))"
-            else
-              echo "gcloud token not available in runner (this is normal for local tests)."
-            fi
-          else
-            echo "gcloud not installed on runner."
-          fi
-          echo "Bootstrap workspace created at .github/ai_tmp"
-
-      - name: Upload debug artifact
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-bootstrap
-          path: .github/ai_tmp
+          name: ai-bot-logs
+          path: .github/ai_pr_bot/logs
