@@ -1,4 +1,4 @@
-name: ai-pr-bot-mode2
+name: AI PR Bot - Bootstrap
 
 on:
   issues:
@@ -13,13 +13,11 @@ permissions:
 jobs:
   ai_pr_bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Authenticate with Google Cloud via OIDC
         uses: google-github-actions/auth@v2
@@ -28,213 +26,35 @@ jobs:
           service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
           token_format: access_token
 
-      - name: Configure git
+      - name: Configure git identity
         run: |
           git config --global user.name "AI Issue Bot"
           git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
-      - name: Prepare workspace
+      - name: Create workspace and print context
         run: |
+          set -euo pipefail
           mkdir -p .github/ai_tmp
-
-      - name: Parse issue intent
-        id: parse_intent
-        env:
-          ISSUE_TEXT: ${{ github.event.issue.body }}
-        run: |
-          python3 - <<'PY'
-import os, re, json
-text = os.environ.get("ISSUE_TEXT","").strip()
-blocks = [b.strip() for b in re.split(r'\n-{3,}\n|\n\n+', text) if b.strip()]
-intent = {"commands": []}
-for b in blocks:
-    lines = b.splitlines()
-    header = lines[0].strip() if lines else ""
-    body = "\n".join(lines[1:]).strip()
-    cmd = {}
-    if header.lower().startswith("create file:"):
-        cmd["type"]="create"
-        cmd["path"]=header.split(":",1)[1].strip()
-    elif header.lower().startswith("modify file:"):
-        cmd["type"]="modify"
-        cmd["path"]=header.split(":",1)[1].strip()
-    elif header.lower().startswith("delete file:"):
-        cmd["type"]="delete"
-        cmd["path"]=header.split(":",1)[1].strip()
-    elif "analyze repo" in header.lower():
-        cmd["type"]="analyze"
-    elif header.lower().startswith("find function:"):
-        cmd["type"]="find"
-        cmd["target"]=header.split(":",1)[1].strip()
-    else:
-        cmd["type"]="unknown"
-    allow = re.search(r'ALLOW_FAILING:\s*(true|false)', body, re.I)
-    cmd["allow_failing"] = (allow.group(1).lower() == 'true') if allow else False
-    cmd["description"] = re.sub(r'ALLOW_FAILING:.*','', body, flags=re.I).strip()
-    intent["commands"].append(cmd)
-open(".github/ai_tmp/intent.json","w").write(json.dumps(intent))
-print(json.dumps(intent))
-PY
-
-      - name: Build repo snapshot
-        id: snapshot
-        run: |
-          python3 - <<'PY'
-import os, json, base64
-out=[]
-MAX_FULL=20000
-HEAD=8000
-TAIL=8000
-for root, dirs, files in os.walk("."):
-    if any(x in root for x in [".git", "node_modules", ".venv", "__pycache__", ".github/ai_tmp"]):
-        continue
-    for f in files:
-        p=os.path.join(root,f)
-        if p.startswith("./.git") or p.startswith("./node_modules") or p.startswith("./.github/ai_tmp"):
-            continue
-        rel=p[2:]
-        try:
-            size=os.path.getsize(p)
-            if size > 2000000:
-                out.append({"path":rel,"size":size,"mode":"skip"})
-                continue
-            with open(p,"rb") as fh:
-                data=fh.read()
-            if size <= MAX_FULL:
-                out.append({"path":rel,"size":size,"mode":"full","preview_b64":base64.b64encode(data).decode()})
-            else:
-                head=data[:HEAD]
-                tail=data[-TAIL:] if len(data) > HEAD+TAIL else b""
-                preview=b"".join([head,b"\n---TRUNCATED---\n",tail])
-                out.append({"path":rel,"size":size,"mode":"preview","preview_b64":base64.b64encode(preview).decode()})
-        except Exception as e:
-            out.append({"path":rel,"mode":"error","note":str(e)})
-open(".github/ai_tmp/repo_snapshot.json","w").write(json.dumps(out))
-print("snapshot_written")
-PY
-
-      - name: Build Gemini payload
-        id: build_payload
-        run: |
-          INSTRUCT="You are an AI engineer. Respond ONLY with valid JSON matching: {\"files\":[{\"path\":\"...\",\"action\":\"create|update|delete\",\"content_base64\":\"...\"}],\"summary\":\"...\"}."
-          ISSUE="${{ github.event.issue.body }}"
-          INTENT=$(cat .github/ai_tmp/intent.json)
-          SNAPSHOT=$(cat .github/ai_tmp/repo_snapshot.json)
-          jq -n --arg instr "$INSTRUCT" --arg issue "$ISSUE" --arg intent "$INTENT" --arg snap "$SNAPSHOT" \
-            '{contents:[{parts:[{text:$instr},{text:"### INTENT\n"},{text:$intent},{text:"### ISSUE\n"},{text:$issue},{text:"### SNAPSHOT\n"},{text:$snap}]}]}' \
-            > .github/ai_tmp/payload.json
-          echo "payload_ready"
-
-      - name: Call Gemini (retry)
-        id: call_gemini
-        run: |
-          TOKEN=$(gcloud auth print-access-token)
-          PAYLOAD=.github/ai_tmp/payload.json
-          RAW=.github/ai_tmp/gemini_raw.json
-          TXT=.github/ai_tmp/ai_text.txt
-          CLEAN=.github/ai_tmp/ai.json
-          MAX=3
-          i=0
-          while [ $i -lt $MAX ]; do
-            i=$((i+1))
-            echo "call attempt $i"
-            curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d @"$PAYLOAD" "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" > "$RAW" || true
-            # try to extract the AI text safely
-            txt=$(jq -r '.candidates[0].content.parts[0].text // ""' "$RAW" 2>/dev/null || echo "")
-            echo "$txt" > "$TXT"
-            # try to grab first JSON block
-            json_block=$(echo "$txt" | awk 'BEGIN{in=0} { if(in==0 && match($0,/^\s*{/)){in=1; s=$0; next} if(in==1){ s=s "\n" $0; if(match($0,/^\s*}$/)){ print s; exit }}}')
-            if [ -z "$json_block" ]; then
-              json_block="$txt"
-            fi
-            if echo "$json_block" | jq empty >/dev/null 2>&1; then
-              echo "$json_block" > "$CLEAN"
-              echo "valid_json=1" > .github/ai_tmp/flags
-              break
+          echo "Issue body:"
+          echo "----------"
+          echo "${{ github.event.issue.body }}"
+          echo "----------"
+          # show that gcloud auth works (prints token length only for safety)
+          if command -v gcloud >/dev/null 2>&1; then
+            TOK=$(gcloud auth print-access-token 2>/dev/null || true)
+            if [ -n "$TOK" ]; then
+              echo "gcloud token present (length: $(printf '%s' \"$TOK\" | wc -c))"
             else
-              echo "invalid json on attempt $i"
-              sleep 2
+              echo "gcloud token not available in runner (this is normal for local tests)."
             fi
-          done
-          if [ ! -f "$CLEAN" ]; then
-            echo "failed=true" > .github/ai_tmp/flags
-          fi
-
-      - name: Apply AI changes
-        id: apply_changes
-        run: |
-          FLAGS=".github/ai_tmp/flags"
-          if [ -f "$FLAGS" ] && grep -q "failed=true" "$FLAGS"; then
-            echo "No valid AI JSON produced. Exiting."
-            echo "changed=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          JSON=".github/ai_tmp/ai.json"
-          if [ ! -f "$JSON" ]; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          count=$(jq '.files | length' "$JSON" 2>/dev/null || echo 0)
-          if [ "$count" -eq 0 ]; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          changed=false
-          jq -c '.files[]' "$JSON" | while read -r item; do
-            path=$(echo "$item" | jq -r '.path')
-            action=$(echo "$item" | jq -r '.action')
-            content_b64=$(echo "$item" | jq -r '.content_base64 // ""')
-            case "$action" in
-              create|update)
-                mkdir -p "$(dirname "$path")"
-                echo "$content_b64" | base64 --decode > "$path"
-                echo "applied $action $path"
-                changed=true
-                ;;
-              delete)
-                rm -f "$path" && echo "deleted $path" || echo "delete missing $path"
-                changed=true
-                ;;
-              *)
-                echo "unknown action $action for $path"
-                ;;
-            esac
-          done
-          if [ "$changed" = true ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
           else
-            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "gcloud not installed on runner."
           fi
+          echo "Bootstrap workspace created at .github/ai_tmp"
 
-      - name: Commit & push
-        if: steps.apply_changes.outputs.changed == 'true'
-        id: commit
-        run: |
-          BR="auto-pr-${{ github.event.issue.number }}"
-          git checkout -b "$BR" || git checkout "$BR"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          git commit -m "AI automated changes for Issue #${{ github.event.issue.number }}"
-          git push origin "$BR" --force
-          echo "changed=true" >> $GITHUB_OUTPUT
-
-      - name: Create PR
-        if: steps.commit.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: auto-pr-${{ github.event.issue.number }}
-          base: ${{ github.event.repository.default_branch }}
-          title: "AI PR Bot: Automated Fix for Issue #${{ github.event.issue.number }}"
-          body: |
-            This PR was generated automatically by AI.
-
-      - name: Upload debug
+      - name: Upload debug artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-debug
+          name: ai-bootstrap
           path: .github/ai_tmp
