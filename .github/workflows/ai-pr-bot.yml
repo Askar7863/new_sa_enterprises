@@ -1,168 +1,86 @@
-name: AI PR Bot Automation
+name: Simple File Automation Agent
 
 on:
   issues:
     types: [opened, edited]
 
 jobs:
-  ai_pr_bot:
+  file_agent:
     runs-on: ubuntu-latest
 
     permissions:
-      id-token: write
       contents: write
       pull-requests: write
-      issues: read
 
     steps:
-
-      - name: Checkout repository
+      - name: Checkout Repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Authenticate with Google Cloud via OIDC
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: "projects/314154954531/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
-          service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
-          token_format: access_token
-
-      - name: Set up Git Identity
+      - name: Analyze Repository Structure
         run: |
-          git config --global user.name "AI Issue Bot"
-          git config --global user.email "ai-issue-bot@users.noreply.github.com"
+          echo "🔍 Repository Structure:" > repo_tree.txt
+          tree -a . >> repo_tree.txt 2>/dev/null || find . >> repo_tree.txt
+          echo "📁 Repo tree saved."
 
-      - name: Run Gemini Agent – Generate Actions
-        id: ai_agent
+      - name: Process Issue Instructions
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
-          set -euo pipefail
+          echo "📨 Incoming Request:"
+          echo "$ISSUE_TEXT"
+          echo
 
-          echo "🔥 Starting Gemini Agent"
+          # Normalize instructions to lowercase
+          REQUEST=$(echo "$ISSUE_TEXT" | tr '[:upper:]' '[:lower:]')
 
-          # Safely encode issue
-          SAFE=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
-          ISSUE=$(printf "%s" "$SAFE" | base64 --decode)
+          if echo "$REQUEST" | grep -q "create file"; then
+            FILENAME=$(echo "$REQUEST" | sed -n 's/.*create file \([^ ]*\).*/\1/p')
+            CONTENT=$(echo "$REQUEST" | sed -n 's/.*say "\(.*\)".*/\1/p')
 
-          echo "🧠 Preparing JSON payload…"
-
-          PAYLOAD=$(jq -n --arg issue "$ISSUE" '
-  {
-    contents: [
-      {
-        parts: [
-          {
-            text:
-              "You are an AI GitHub Automation Agent.\n" +
-              "Analyse the issue.\n" +
-              "Modify code.\n" +
-              "Add files.\n" +
-              "Delete files.\n" +
-              "Refactor intelligently.\n" +
-              "Return STRICT JSON ONLY.\n\n" +
-              "FORMAT:\n" +
-              "{\"files\":[{\"path\":\"path\",\"action\":\"create|update|delete\",\"content\":\"text\"}]}\n" +
-              "If no changes: {\"files\":[]}\n\n" +
-              "ISSUE:\n" + $issue
-          }
-        ]
-      }
-    ]
-  }
-')
-
-
-          echo "$PAYLOAD" > payload.json
-
-          echo "🔥 Calling Gemini API…"
-
-          RESPONSE=$(curl -s -X POST \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY")
-
-          echo "$RESPONSE" > gemini_raw_response.json
-
-          RAW=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // ""')
-
-          if [ -z "$RAW" ]; then
-            echo "⚠️ Empty response — using fallback"
-            RAW='{"files":[]}'
-          fi
-
-          # Clean JSON
-          if echo "$RAW" | jq empty >/dev/null 2>&1; then
-            CLEAN="$RAW"
-          else
-            CLEAN=$(printf "%s" "$RAW" | sed -n 's/.*\({.*}\).*/\1/p')
-            if ! echo "$CLEAN" | jq empty >/dev/null 2>&1; then
-              CLEAN='{"files":[]}'
+            if [ -n "$FILENAME" ]; then
+              echo "🆕 Creating $FILENAME"
+              echo "${CONTENT:-New file created by bot}" > "$FILENAME"
             fi
           fi
 
-          echo "$CLEAN" > AI_RESPONSE.json
-
-          FILE_COUNT=$(echo "$CLEAN" | jq '.files | length')
-
-          if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "⚠️ No modifications requested."
-            exit 0
+          if echo "$REQUEST" | grep -q "modify"; then
+            TARGET=$(echo "$REQUEST" | sed -n 's/.*modify \([^ ]*\).*/\1/p')
+            if [ -f "$TARGET" ]; then
+              echo "✏ Modifying content of $TARGET"
+              echo "" >> "$TARGET"
+              echo "# Bot Modification: $(date)" >> "$TARGET"
+              echo "Modification requested: $ISSUE_TEXT" >> "$TARGET"
+            else
+              echo "⚠ File not found for modification"
+            fi
           fi
-
-          echo "📄 Applying file changes…"
-
-          echo "$CLEAN" | jq -c '.files[]' > file_actions.jsonl
-
-          while IFS= read -r row; do
-            FILEPATH=$(echo "$row" | jq -r '.path')
-            ACTION=$(echo "$row" | jq -r '.action')
-            CONTENT=$(echo "$row" | jq -r '.content')
-
-            case "$ACTION" in
-              create|update)
-                mkdir -p "$(dirname "$FILEPATH")"
-                printf "%s" "$CONTENT" > "$FILEPATH"
-                echo "✔ $ACTION → $FILEPATH"
-                ;;
-              delete)
-                rm -f "$FILEPATH"
-                echo "🗑 Deleted → $FILEPATH"
-                ;;
-            esac
-
-          done < file_actions.jsonl
 
       - name: Commit & Push Changes
-        id: commit_changes
         run: |
-          BRANCH="ai-agent-${{ github.event.issue.number }}"
-          git checkout -b "$BRANCH" || git checkout "$BRANCH"
+          git config user.name "AI File Bot"
+          git config user.email "bot@noreply.com"
+          BRANCH="auto-${{ github.event.issue.number }}"
+
+          git checkout -b "$BRANCH"
           git add .
           if git diff --cached --quiet; then
-            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No changes. Exiting."
             exit 0
           fi
-          git commit -m "AI Agent: Automated changes for issue #${{ github.event.issue.number }}"
-          git push origin "$BRANCH" --force
-          echo "changed=true" >> $GITHUB_OUTPUT
 
-      - name: Create Pull Request
-        if: steps.commit_changes.outputs.changed == 'true'
+          git commit -m "Automated file action from Issue #${{ github.event.issue.number }}"
+          git push origin "$BRANCH"
+
+      - name: Open Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ai-agent-${{ github.event.issue.number }}
-          base: ${{ github.event.repository.default_branch }}
-          title: "AI Agent PR – Issue #${{ github.event.issue.number }}"
+          branch: auto-${{ github.event.issue.number }}
+          title: "Automated File Update for Issue #${{ github.event.issue.number }}"
           body: |
-            AI Agent has analyzed the issue and created/update files.
+            This Pull Request was automatically generated based on the issue instructions.
 
-            ## Issue
+            ### Issue Content:
             ```
             ${{ github.event.issue.body }}
             ```
-
-            Powered by Gemini 2.5 Flash 🚀
