@@ -1,0 +1,161 @@
+🔍 Repository Structure:
+.
+├── .git
+│   ├── FETCH_HEAD
+│   ├── HEAD
+│   ├── config
+│   ├── config.worktree
+│   ├── description
+│   ├── hooks
+│   │   ├── applypatch-msg.sample
+│   │   ├── commit-msg.sample
+│   │   ├── fsmonitor-watchman.sample
+│   │   ├── post-update.sample
+│   │   ├── pre-applypatch.sample
+│   │   ├── pre-commit.sample
+│   │   ├── pre-merge-commit.sample
+│   │   ├── pre-push.sample
+│   │   ├── pre-rebase.sample
+│   │   ├── pre-receive.sample
+│   │   ├── prepare-commit-msg.sample
+│   │   ├── push-to-checkout.sample
+│   │   ├── sendemail-validate.sample
+│   │   └── update.sample
+│   ├── index
+│   ├── info
+│   │   └── exclude
+│   ├── logs
+│   │   ├── HEAD
+│   │   └── refs
+│   │       ├── heads
+│   │       │   └── bug_fix
+│   │       └── remotes
+│   │           └── origin
+│   │               └── bug_fix
+│   ├── objects
+│   │   ├── 00
+│   │   │   └── b408912d00396754584f49f927deb2ef985457
+│   │   ├── 03
+│   │   │   └── d14fedeeae4feb7402ca6449247bbddc58ca56
+│   │   ├── 0a
+│   │   │   └── 504ce36998f8412cffc9df9fbf574330426b40
+│   │   ├── 0d
+│   │   │   └── 4c2e57d4f9c85bbd90ce32ca328a01c2a778cd
+│   │   ├── 1e
+│   │   │   └── b5ab637b1d36642246e7ccfcb03a6e545c3e41
+│   │   ├── 26
+│   │   │   ├── 5c0a487938b32a454a8b70ede427310c0dd1b0
+│   │   │   └── daf3edb9af4dcd1692bf2431304e5a7ad7e011
+│   │   ├── 28
+│   │   │   └── 88a8c8f996bb03b69d32a395357358c2d191cc
+│   │   ├── 29
+│   │   │   └── 63ad2726e0f7ec7064f35705ed5dd04c6a843c
+│   │   ├── 3d
+│   │   │   ├── 8b71c7368f917cf8dfcf87b40eaf0bce84e1db
+│   │   │   └── c32043320a3ecd75b6dcf1758574bf211838af
+│   │   ├── 54
+│   │   │   └── e81e19888a1732295862bbd67b14614aceba3a
+│   │   ├── 6d
+│   │   │   └── cc706418cb8348bec56c2d3bbf1e30405dbfa6
+│   │   ├── 6f
+│   │   │   └── 380068a4106b7f490e918042b2c494c27a2484
+│   │   ├── 75
+│   │   │   └── fbc2ada0b86f4b1f8b336758b18b43be93491e
+│   │   ├── 77
+│   │   │   └── 26b339030d930dd287d60f6df19185fb752e6a
+│   │   ├── 79
+│   │   │   └── cbf1d03da49efc09e1f37edc255183699dd166
+│   │   ├── 7d
+│   │   │   └── e7d1349a71ce54927bc03908bf2d9e51e197b5
+│   │   ├── 93
+│   │   │   └── 06fd20463732981bc9efc19d490c53b6e40c10
+│   │   ├── 9a
+│   │   │   └── 83b2ac75ca209fc4ad0da7652c6272572b2f90
+│   │   ├── 9b
+│   │   │   └── 297873cfa210cc0f2a4acb14c05d08be7c7d09
+│   │   ├── 9d
+│   │   │   └── 1437e6d9e5eb7bd2734f087e928dfc5ad814c0
+│   │   ├── 9e
+│   │   │   └── e79269b9b65cbff04f8059fa2152518fd19915
+│   │   ├── b1
+│   │   │   ├── 4c36a43b273833af3155ab016269109b24f853
+│   │   │   └── 65d4a08c66fbf23081a7222ea172f893cca99a
+│   │   ├── b2
+│   │   │   ├── 867337f1f7ade2335cd69259eeea707f529887
+│   │   │   └── f761116dcb0ecc758cf612432042150ce213c2
+│   │   ├── b9
+│   │   │   └── 49ae5e369fc385bbdb26243c0dbc9bbc1e23b6
+│   │   ├── c1
+│   │   │   └── f116a9272146c986154a4fb6f7eb4f6f5288f9
+│   │   ├── ca
+│   │   │   └── 4869f6aafacdaabd74f1d5637ebe7802a9a4e8
+│   │   ├── cb
+│   │   │   └── 1a1dda4749c38b25b54473ef653be973510260
+│   │   ├── d5
+│   │   │   ├── 3ef00f7f78890e6fac4d49986c53d17e3d440e
+│   │   │   └── fd5b19ab5ca9ccf9ec72f277dfbdd3054a527e
+│   │   ├── de
+│   │   │   └── 7de425e50e23cd42df7ab4b7b84487a89cac2d
+│   │   ├── e9
+│   │   │   └── bc8b27727e4ecf6946005f8158ed5d79210891
+│   │   ├── f0
+│   │   │   └── a5a76b02db559df147c27871dfaff897496ece
+│   │   ├── f9
+│   │   │   └── 2053ac062ec745f5c95d6a197ff1600d99c119
+│   │   ├── fb
+│   │   │   └── c6b38b0c845a6ba2ac089fa6e16b214694b3f9
+│   │   ├── fc
+│   │   │   └── 568d6214da2840c3c5aaa3b8d83c5f23031df9
+│   │   ├── fd
+│   │   │   └── ae7ff89166e9c0d0dc206d9e6febc33231d51c
+│   │   ├── info
+│   │   └── pack
+│   ├── refs
+│   │   ├── heads
+│   │   │   └── bug_fix
+│   │   ├── remotes
+│   │   │   └── origin
+│   │   │       └── bug_fix
+│   │   └── tags
+│   └── shallow
+├── .github
+│   └── workflows
+│       └── ai-pr-bot.yml
+├── CLAUDE_INIT.md
+├── PR_INIT.md
+├── README.md
+├── app.py
+├── config.py
+├── forms.py
+├── main.py
+├── models.py
+├── repo_tree.txt
+├── static
+│   ├── app.js
+│   ├── css
+│   │   └── style.css
+│   ├── js
+│   │   └── script.js
+│   └── style.css
+└── templates
+    ├── admin
+    │   ├── dashboard.html
+    │   ├── order_detail.html
+    │   ├── orders.html
+    │   ├── product_form.html
+    │   └── products.html
+    ├── base.html
+    ├── cart.html
+    ├── checkout.html
+    ├── errors
+    │   ├── 403.html
+    │   ├── 404.html
+    │   └── generic.html
+    ├── index.html
+    ├── login.html
+    ├── orders.html
+    ├── product_detail.html
+    ├── products.html
+    └── register.html
+
+60 directories, 98 files
