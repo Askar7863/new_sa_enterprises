@@ -1,11 +1,11 @@
-name: AI PR Bot
+name: AI PR Bot Automation
 
 on:
   issues:
     types: [opened, edited]
 
 jobs:
-  ai_bot:
+  ai_pr_bot:
     runs-on: ubuntu-latest
 
     permissions:
@@ -16,124 +16,113 @@ jobs:
 
     steps:
 
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Authenticate to Google Cloud (OIDC)
+      - name: Authenticate with Google Cloud via OIDC
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: "projects/314154954531/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
           service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
           token_format: access_token
 
-      - name: Set Git Identity
+      - name: Set up Git user
         run: |
-          git config --global user.name "AI Automation Bot"
-          git config --global user.email "ai-bot@noreply.github.com"
+          git config --global user.name "AI Issue Bot"
+          git config --global user.email "ai-issue-bot@users.noreply.github.com"
 
-      - name: Run Gemini AI Agent
-        id: ai_agent
+      - name: Run Gemini Agent (File Actions)
+        id: ai_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ISSUE: ${{ github.event.issue.body }}
+          ISSUE_TEXT: ${{ github.event.issue.body }}
         run: |
-          echo "🔥 Running AI Agent"
-          echo "Issue:"
-          echo "$ISSUE"
+          set -euo pipefail
+          echo "🔥 Running Gemini Agent"
 
-          # Build Safe Prompt
-          PROMPT="You are an AI GitHub automation agent. Read the Issue and return valid JSON only.
-          Format: {\"files\":[{\"path\":\"file\",\"action\":\"create|update|delete\",\"content\":\"text\"}]}
-          If no changes required return: {\"files\":[]}
-          Issue: $ISSUE"
+          SAFE_ISSUE=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
+          DECODED=$(printf "%s" "$SAFE_ISSUE" | base64 --decode)
+
+          PAYLOAD=$(cat <<EOF
+          {
+            "contents":[{"parts":[{"text":"Return ONLY valid JSON. Format: {\"files\":[{\"path\":\"file\",\"action\":\"create|update|delete\",\"content\":\"...\"}]} If no changes, return {\"files\":[]}.\nIssue:\n$DECODED"}]}]
+          }
+          EOF
+          )
 
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
-            -d "{\"contents\":[{\"parts\":[{\"text\":\"$PROMPT\"}]}]}" \
+            -d "$PAYLOAD" \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY")
 
           echo "$RESPONSE" > gemini_raw_response.json
 
-          AI=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
+          TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // ""')
 
-          if [ -z "$AI" ]; then
-            echo '{"files":[]}' > AI.json
-          elif echo "$AI" | jq empty >/dev/null 2>&1; then
-            echo "$AI" > AI.json
+          if ! echo "$TEXT" | jq empty >/dev/null 2>&1; then
+            echo "⚠ Using fallback"
+            TEXT='{"files":[]}'
+          fi
+
+          echo "$TEXT" > AI_RESPONSE.json
+
+          COUNT=$(echo "$TEXT" | jq '.files | length')
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "📁 Processing AI file instructions..."
+            echo "$TEXT" | jq -r '.files[] | @base64' > _tmpfiles
+            while IFS= read -r row; do
+              obj=$(echo "$row" | base64 --decode)
+              path=$(echo "$obj" | jq -r '.path')
+              action=$(echo "$obj" | jq -r '.action')
+              content=$(echo "$obj" | jq -r '.content // ""')
+
+              case "$action" in
+                create|update)
+                  mkdir -p "$(dirname "$path")"
+                  printf "%s" "$content" > "$path"
+                  ;;
+                delete)
+                  rm -f "$path"
+                  ;;
+              esac
+            done < _tmpfiles
           else
-            # Attempt to extract first JSON object
-            CLEAN=$(echo "$AI" | sed -n 's/.*\({.*}\).*/\1/p')
-            if echo "$CLEAN" | jq empty >/dev/null 2>&1; then
-              echo "$CLEAN" > AI.json
-            else
-              echo '{"files":[]}' > AI.json
-            fi
+            echo "📌 No AI edits. Creating fallback file to force commit."
+            echo "AI found no required changes for issue #${{ github.event.issue.number }}" > fallback_${{ github.event.issue.number }}.txt
           fi
 
-          echo "AI Response:"
-          cat AI.json
-
-          # Apply file changes
-          FILE_COUNT=$(jq '.files | length' AI.json)
-          if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "NO_FILE_CHANGES=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "Applying file changes..."
-          jq -c '.files[]' AI.json | while read -r fileObj; do
-            PATHF=$(echo "$fileObj" | jq -r '.path')
-            ACTION=$(echo "$fileObj" | jq -r '.action')
-            CONTENT=$(echo "$fileObj" | jq -r '.content // ""')
-
-            case "$ACTION" in
-              create|update)
-                mkdir -p "$(dirname "$PATHF")"
-                printf "%s" "$CONTENT" > "$PATHF"
-                echo "✔ $ACTION => $PATHF"
-              ;;
-              delete)
-                rm -f "$PATHF"
-                echo "🗑 Deleted => $PATHF"
-              ;;
-              *)
-                echo "⚠ Unknown action: $ACTION"
-              ;;
-            esac
-          done
-
-          echo "NO_FILE_CHANGES=false" >> $GITHUB_OUTPUT
-
-      - name: Commit & Push
-        if: steps.ai_agent.outputs.NO_FILE_CHANGES == 'false'
+      - name: Commit & Push Changes
+        id: commit_step
         run: |
-          BRANCH="ai-auto-${{ github.event.issue.number }}"
-          DEFAULT="${{ github.event.repository.default_branch }}"
+          set -e
 
-          if git show-ref --verify --quiet refs/heads/$BRANCH; then
-            git checkout $BRANCH
-          else
-            git checkout -b $BRANCH
-          fi
+          BRANCH="ai-force-${{ github.event.issue.number }}"
+          git checkout -b "$BRANCH" || git checkout "$BRANCH"
 
           git add .
-          git commit -m "AI automated update for Issue #${{ github.event.issue.number }}" || exit 0
-          git push origin $BRANCH --force
 
-      - name: Create Pull Request
-        if: steps.ai_agent.outputs.NO_FILE_CHANGES == 'false'
+          git commit -m "AI Forced Commit for Issue #${{ github.event.issue.number }}" || echo "Nothing to commit"
+          git push origin "$BRANCH" --force || true
+
+      - name: Open Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ai-auto-${{ github.event.issue.number }}
+          branch: ai-force-${{ github.event.issue.number }}
           base: ${{ github.event.repository.default_branch }}
-          title: "AI Auto Fix – Issue #${{ github.event.issue.number }}"
+          title: "AI Auto PR - Issue #${{ github.event.issue.number }}"
           body: |
-            Automated fix using Gemini AI Agent.
+            This PR was created automatically by the AI Agent.
 
-            ### Issue
+            ### Issue:
             ```
             ${{ github.event.issue.body }}
             ```
+
+            ### Notes:
+            - Branch created even if no AI changes
+            - Gemini 2.5 Flash used for reasoning
+            - Full automation mode enabled
