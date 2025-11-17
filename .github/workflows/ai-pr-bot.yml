@@ -13,29 +13,30 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Authenticate with Google Cloud
+
+      # 1️⃣ Checkout repository FIRST
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # 2️⃣ Authenticate with Google Cloud
       - name: Google Auth
         id: auth
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      # 2️⃣ Setup gcloud
+      # 3️⃣ Install gcloud
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      # 3️⃣ Checkout repository
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      # 4️⃣ Install Vertex AI SDK
+      # 4️⃣ Install Vertex AI Python SDK
       - name: Install dependencies
         run: |
           pip install google-cloud-aiplatform
 
-      # 5️⃣ Run Gemini model
+      # 5️⃣ Execute Gemini (Vertex AI Flash 1.5)
       - name: Run Gemini model
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -50,7 +51,7 @@ jobs:
           ISSUE_TITLE = os.getenv("RAW_ISSUE_TITLE")
           ISSUE_BODY  = os.getenv("RAW_ISSUE_BODY")
 
-          # Escape safely
+          # Safely escape GitHub text
           ISSUE_TITLE = json.loads(json.dumps(ISSUE_TITLE))
           ISSUE_BODY  = json.loads(json.dumps(ISSUE_BODY))
 
@@ -73,7 +74,6 @@ jobs:
           }}
           """
 
-          # Vertex AI Flash Prediction API
           response = client.predict(
               endpoint=endpoint,
               instances=[{"prompt": prompt}],
@@ -99,7 +99,7 @@ jobs:
           print("✅ Updated file:", file_path)
           EOF
 
-      # 6️⃣ Commit & Push
+      # 6️⃣ Commit changes and push
       - name: Commit changes
         run: |
           BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-40)
@@ -108,14 +108,14 @@ jobs:
           git add .
 
           if git diff --cached --quiet; then
-            echo "⚠️ No changes — PR skipped"
+            echo "⚠️ No changes — skipping PR"
             exit 0
           fi
 
           git commit -m "AI update for issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}"
           git push origin "$BRANCH"
 
-      # 7️⃣ Create PR
+      # 7️⃣ Create Pull Request
       - name: Create PR
         run: |
           BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-40)
