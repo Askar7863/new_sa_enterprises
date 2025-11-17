@@ -13,40 +13,118 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      # -----------------------------
+      # 1️⃣ Authenticate with GCP
+      # -----------------------------
+      - name: Google Auth
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
+      # -----------------------------
+      # 2️⃣ Install & configure gcloud
+      # -----------------------------
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: YOUR_PROJECT_ID
-          service_account_key: ${{ secrets.GOOGLE_CLOUD_CREDENTIALS }}
-          export_default_credentials: true
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Install Vertex AI Python SDK
-        run: pip install google-cloud-aiplatform
+      # -----------------------------
+      # 3️⃣ Checkout Repo
+      # -----------------------------
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - name: Run Gemini Flash 2.5
+      # -----------------------------
+      # 4️⃣ Install Vertex AI SDK
+      # -----------------------------
+      - name: Install dependencies
+        run: |
+          pip install google-cloud-aiplatform
+
+      # -----------------------------
+      # 5️⃣ Run Gemini Flash 2.5
+      # -----------------------------
+      - name: Run Gemini model
         run: |
           python3 << 'EOF'
+          import os, json, re
           from google.cloud import aiplatform
-          
-          aiplatform.init(project="YOUR_PROJECT_ID", location="us-central1")
+
+          PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+          ISSUE_TITLE = "${{ github.event.issue.title }}"
+          ISSUE_BODY = "${{ github.event.issue.body }}"
+
+          # Init Vertex AI
+          aiplatform.init(project=PROJECT_ID, location="us-central1")
 
           model = aiplatform.GenerativeModel("gemini-1.5-flash-002")
 
-          ISSUE_TITLE = "${{ github.event.issue.title }}"
-          ISSUE_BODY  = "${{ github.event.issue.body }}"
-
           prompt = f"""
+          You are an autonomous code generator.
           Task: {ISSUE_BODY}
-          Output ONLY JSON:
+
+          Respond ONLY in JSON:
           {{
-             "file_path": "...",
-             "new_content": "..."
+            "file_path": "path/to/file",
+            "new_content": "<full file content>"
           }}
           """
 
           response = model.generate_content(prompt)
-          print(response.text)
+          print("RAW MODEL OUTPUT:", response.text)
+
+          try:
+              data = json.loads(response.text)
+          except:
+              raise SystemExit(f"INVALID JSON from Gemini: {response.text}")
+
+          file_path = data["file_path"]
+          content = data["new_content"]
+
+          # create folder if needed
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+          # write file
+          with open(file_path, "w") as f:
+              f.write(content)
+
+          print("UPDATED:", file_path)
           EOF
+
+      # -----------------------------
+      # 6️⃣ Commit & Push
+      # -----------------------------
+      - name: Commit changes
+        run: |
+          BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-40)
+
+          git checkout -b "$BRANCH"
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "⚠️ No changes — PR skipped"
+            exit 0
+          fi
+
+          git commit -m "AI update for issue #${{ github.event.issue.number }}"
+          git push origin "$BRANCH"
+
+      # -----------------------------
+      # 7️⃣ Create PR
+      # -----------------------------
+      - name: Create PR
+        run: |
+          BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-40)
+
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository_owner }}/${{ github.event.repository.name }}/pulls \
+            -d "{
+              \"title\": \"AI PR: ${{ github.event.issue.title }}\",
+              \"body\": \"Generated from Issue #${{ github.event.issue.number }}\",
+              \"head\": \"$BRANCH\",
+              \"base\": \"main\"
+            }"
