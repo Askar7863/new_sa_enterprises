@@ -43,54 +43,57 @@ jobs:
         run: |
           pip install google-cloud-aiplatform
 
+      # -----------------------------
+      # 5️⃣ Run Gemini model
+      # -----------------------------
       - name: Run Gemini model
-  run: |
-    python3 << 'EOF'
-    import os, json, re
-    from google.cloud import aiplatform
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          python3 << 'EOF'
+          import os, json, re
+          from google.cloud import aiplatform
 
-    PROJECT_ID = "${{ secrets.GCP_PROJECT_ID }}"
+          PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 
-    # Escape everything safely using triple quotes
-    ISSUE_TITLE = """${{ github.event.issue.title }}"""
-    ISSUE_BODY  = """${{ github.event.issue.body }}"""
+          ISSUE_TITLE = """${{ github.event.issue.title }}"""
+          ISSUE_BODY  = """${{ github.event.issue.body }}"""
 
-    aiplatform.init(project=PROJECT_ID, location="us-central1")
+          aiplatform.init(project=PROJECT_ID, location="us-central1")
 
-    model = aiplatform.GenerativeModel("gemini-1.5-flash-002")
+          model = aiplatform.GenerativeModel("gemini-1.5-flash-002")
 
-    prompt = f"""
-    You are an autonomous code generator.
-    Task from the GitHub Issue:
+          prompt = f"""
+          You are an autonomous code generator.
+          Task from the GitHub Issue:
 
-    {ISSUE_BODY}
+          {ISSUE_BODY}
 
-    Respond ONLY in JSON:
-    {{
-      "file_path": "<path/to/file>",
-      "new_content": "<full updated file>"
-    }}
-    """
+          Return ONLY JSON:
+          {{
+            "file_path": "path/to/file",
+            "new_content": "<full file>"
+          }}
+          """
 
-    response = model.generate_content(prompt)
-    print("RAW MODEL OUTPUT:", response.text)
+          response = model.generate_content(prompt)
+          print("RAW MODEL OUTPUT:", response.text)
 
-    try:
-        data = json.loads(response.text)
-    except Exception as e:
-        raise SystemExit("❌ INVALID JSON from Gemini:\n" + response.text)
+          try:
+              data = json.loads(response.text)
+          except Exception as e:
+              raise SystemExit("❌ INVALID JSON from Gemini:\n" + response.text)
 
-    file_path = data["file_path"]
-    content = data["new_content"]
+          file_path = data["file_path"]
+          content = data["new_content"]
 
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
-    with open(file_path, "w") as f:
-        f.write(content)
+          with open(file_path, "w") as f:
+              f.write(content)
 
-    print("✅ Updated file:", file_path)
-    EOF
-
+          print("✅ Updated file:", file_path)
+          EOF
 
       # -----------------------------
       # 6️⃣ Commit & Push
@@ -107,7 +110,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "AI update for issue #${{ github.event.issue.number }}"
+          git commit -m "AI update for issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}"
           git push origin "$BRANCH"
 
       # -----------------------------
@@ -123,7 +126,7 @@ jobs:
             https://api.github.com/repos/${{ github.repository_owner }}/${{ github.event.repository.name }}/pulls \
             -d "{
               \"title\": \"AI PR: ${{ github.event.issue.title }}\",
-              \"body\": \"Generated from Issue #${{ github.event.issue.number }}\",
+              \"body\": \"Generated automatically from Issue #${{ github.event.issue.number }}\",
               \"head\": \"$BRANCH\",
               \"base\": \"main\"
             }"
