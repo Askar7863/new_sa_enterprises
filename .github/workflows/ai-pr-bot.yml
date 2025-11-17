@@ -20,7 +20,7 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      # 2️⃣ Install & configure gcloud
+      # 2️⃣ Setup gcloud
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
@@ -35,7 +35,8 @@ jobs:
         run: |
           pip install google-cloud-aiplatform
 
-            - name: Run Gemini model
+      # 5️⃣ Run Gemini model
+      - name: Run Gemini model
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           RAW_ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -49,6 +50,7 @@ jobs:
           ISSUE_TITLE = os.getenv("RAW_ISSUE_TITLE")
           ISSUE_BODY  = os.getenv("RAW_ISSUE_BODY")
 
+          # Escape safely
           ISSUE_TITLE = json.loads(json.dumps(ISSUE_TITLE))
           ISSUE_BODY  = json.loads(json.dumps(ISSUE_BODY))
 
@@ -71,13 +73,14 @@ jobs:
           }}
           """
 
+          # Vertex AI Flash Prediction API
           response = client.predict(
               endpoint=endpoint,
               instances=[{"prompt": prompt}],
               parameters={"temperature": 0}
           )
 
-          output_text = response.predictions[0]["content"]
+          output_text = response.predictions[0]
           print("RAW MODEL OUTPUT:", output_text)
 
           try:
@@ -96,7 +99,6 @@ jobs:
           print("✅ Updated file:", file_path)
           EOF
 
-
       # 6️⃣ Commit & Push
       - name: Commit changes
         run: |
@@ -110,7 +112,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "AI update for issue #${{ github.event.issue.number }}: ${ISSUE_TITLE}"
+          git commit -m "AI update for issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}"
           git push origin "$BRANCH"
 
       # 7️⃣ Create PR
