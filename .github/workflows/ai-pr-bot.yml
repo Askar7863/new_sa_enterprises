@@ -35,7 +35,7 @@ jobs:
         run: |
           pip install google-cloud-aiplatform
 
-      # 5️⃣ Execute Gemini Model
+      # 5️⃣ Run Gemini (Vertex AI)
       - name: Run Gemini model
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -50,17 +50,20 @@ jobs:
           ISSUE_TITLE = os.getenv("RAW_ISSUE_TITLE")
           ISSUE_BODY  = os.getenv("RAW_ISSUE_BODY")
 
-          # Escape safely using json.dumps → prevents Python triple-quote errors
+          # Escape unsafe text
           ISSUE_TITLE = json.loads(json.dumps(ISSUE_TITLE))
           ISSUE_BODY  = json.loads(json.dumps(ISSUE_BODY))
 
           aiplatform.init(project=PROJECT_ID, location="us-central1")
 
-          model = aiplatform.GenerativeModel("gemini-1.5-flash-002")
+          # CORRECT Vertex AI Gemini Flash loader
+          model = aiplatform.TextGenerationModel.from_pretrained(
+              "gemini-1.5-flash-002"
+          )
 
           prompt = f"""
           You are an autonomous code generator.
-          Task from the GitHub Issue:
+          Task from GitHub Issue:
 
           {ISSUE_BODY}
 
@@ -71,13 +74,17 @@ jobs:
           }}
           """
 
-          response = model.generate_content(prompt)
-          print("RAW MODEL OUTPUT:", response.text)
+          # Correct Vertex AI inference
+          response = model.predict(prompt)
+
+          # Extract model text output
+          output_text = response.text
+          print("RAW MODEL OUTPUT:", output_text)
 
           try:
-              data = json.loads(response.text)
+              data = json.loads(output_text)
           except:
-              raise SystemExit("❌ INVALID JSON from Gemini:\n" + response.text)
+              raise SystemExit("❌ INVALID JSON returned:\n" + output_text)
 
           file_path = data["file_path"]
           content = data["new_content"]
@@ -103,10 +110,10 @@ jobs:
             exit 0
           fi
 
-          git commit -m "AI update for issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}"
+          git commit -m "AI update for issue #${{ github.event.issue.number }}: ${ISSUE_TITLE}"
           git push origin "$BRANCH"
 
-      # 7️⃣ Create Pull Request
+      # 7️⃣ Create PR
       - name: Create PR
         run: |
           BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-40)
