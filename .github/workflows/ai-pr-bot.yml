@@ -35,8 +35,7 @@ jobs:
         run: |
           pip install google-cloud-aiplatform
 
-      # 5️⃣ Run Gemini (Vertex AI)
-      - name: Run Gemini model
+            - name: Run Gemini model
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           RAW_ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -50,16 +49,14 @@ jobs:
           ISSUE_TITLE = os.getenv("RAW_ISSUE_TITLE")
           ISSUE_BODY  = os.getenv("RAW_ISSUE_BODY")
 
-          # Escape unsafe text
           ISSUE_TITLE = json.loads(json.dumps(ISSUE_TITLE))
           ISSUE_BODY  = json.loads(json.dumps(ISSUE_BODY))
 
           aiplatform.init(project=PROJECT_ID, location="us-central1")
 
-          # CORRECT Vertex AI Gemini Flash loader
-          model = aiplatform.TextGenerationModel.from_pretrained(
-              "gemini-1.5-flash-002"
-          )
+          client = aiplatform.gapic.PredictionServiceClient()
+
+          endpoint = f"projects/{PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.5-flash-002"
 
           prompt = f"""
           You are an autonomous code generator.
@@ -67,23 +64,25 @@ jobs:
 
           {ISSUE_BODY}
 
-          Return ONLY JSON:
+          Return ONLY strict JSON:
           {{
             "file_path": "path/to/file",
             "new_content": "<full file content>"
           }}
           """
 
-          # Correct Vertex AI inference
-          response = model.predict(prompt)
+          response = client.predict(
+              endpoint=endpoint,
+              instances=[{"prompt": prompt}],
+              parameters={"temperature": 0}
+          )
 
-          # Extract model text output
-          output_text = response.text
+          output_text = response.predictions[0]["content"]
           print("RAW MODEL OUTPUT:", output_text)
 
           try:
               data = json.loads(output_text)
-          except:
+          except Exception:
               raise SystemExit("❌ INVALID JSON returned:\n" + output_text)
 
           file_path = data["file_path"]
@@ -96,6 +95,7 @@ jobs:
 
           print("✅ Updated file:", file_path)
           EOF
+
 
       # 6️⃣ Commit & Push
       - name: Commit changes
