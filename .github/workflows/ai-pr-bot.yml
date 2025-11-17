@@ -1,128 +1,119 @@
-name: AI PR Bot Automation
+name: Google CLI Auto Dev
 
 on:
   issues:
-    types: [opened, edited]
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
 
 jobs:
-  ai_pr_bot:
+  ai-dev:
     runs-on: ubuntu-latest
 
-    permissions:
-      id-token: write
-      contents: write
-      pull-requests: write
-      issues: read
+    env:
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 
     steps:
-
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Authenticate with Google Cloud via OIDC
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: "projects/314154954531/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
-          service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
-          token_format: access_token
-
-      - name: Set up Git user
+      - name: Install dependencies
         run: |
-          git config --global user.name "AI Issue Bot"
-          git config --global user.email "ai-issue-bot@users.noreply.github.com"
+          pip install google-generativeai python-dotenv
 
-      - name: Run Gemini Agent (File Actions)
-        id: ai_step
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ISSUE_TEXT: ${{ github.event.issue.body }}
+      - name: Configure Git
         run: |
-          set -euo pipefail
+          git config --global user.name "google-cli-bot"
+          git config --global user.email "actions@github.com"
+
+      - name: Run Gemini AI Agent
+        shell: bash
+        run: |
           echo "🔥 Running Gemini Agent"
 
-          SAFE_ISSUE=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
-          DECODED=$(printf "%s" "$SAFE_ISSUE" | base64 --decode)
+          python3 << 'EOF'
+          import os, re, json, google.generativeai as genai
 
-          PAYLOAD=$(cat <<EOF
-          {
-            "contents":[{"parts":[{"text":"Return ONLY valid JSON. Format: {\"files\":[{\"path\":\"file\",\"action\":\"create|update|delete\",\"content\":\"...\"}]} If no changes, return {\"files\":[]}.\nIssue:\n$DECODED"}]}]
-          }
+          issue_title = os.getenv("ISSUE_TITLE")
+          issue_body  = os.getenv("ISSUE_BODY")
+          branch_name = re.sub(r'[^a-zA-Z0-9_-]', '-', issue_title.lower())[:40]
+
+          genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+          model = genai.GenerativeModel("gemini-1.5-pro")
+
+          prompt = f"""
+          You are an autonomous GitHub engineer.
+          TASK FROM ISSUE:
+          {issue_body}
+
+          Respond ONLY with valid JSON like this example:
+          {{
+            "file_path": "src/main.py",
+            "new_content": "<entire updated file content>"
+          }}
+          """
+
+          response = model.generate_content(prompt)
+
+          try:
+              data = json.loads(response.text)
+          except:
+              print("❌ Gemini returned invalid JSON or empty output.")
+              print("Output was:", response.text)
+              exit(1)
+
+          file_path = data.get("file_path")
+          new_content = data.get("new_content")
+
+          if not file_path or not new_content:
+              print("❌ file_path or new_content missing — cannot update file.")
+              exit(1)
+
+          # Ensure directory exists
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+          # Write the updated file
+          with open(file_path, "w") as f:
+              f.write(new_content)
+
+          print("✅ Updated:", file_path)
           EOF
-          )
 
-          RESPONSE=$(curl -s -X POST \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY")
-
-          echo "$RESPONSE" > gemini_raw_response.json
-
-          TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // ""')
-
-          if ! echo "$TEXT" | jq empty >/dev/null 2>&1; then
-            echo "⚠ Using fallback"
-            TEXT='{"files":[]}'
-          fi
-
-          echo "$TEXT" > AI_RESPONSE.json
-
-          COUNT=$(echo "$TEXT" | jq '.files | length')
-
-          if [ "$COUNT" -gt 0 ]; then
-            echo "📁 Processing AI file instructions..."
-            echo "$TEXT" | jq -r '.files[] | @base64' > _tmpfiles
-            while IFS= read -r row; do
-              obj=$(echo "$row" | base64 --decode)
-              path=$(echo "$obj" | jq -r '.path')
-              action=$(echo "$obj" | jq -r '.action')
-              content=$(echo "$obj" | jq -r '.content // ""')
-
-              case "$action" in
-                create|update)
-                  mkdir -p "$(dirname "$path")"
-                  printf "%s" "$content" > "$path"
-                  ;;
-                delete)
-                  rm -f "$path"
-                  ;;
-              esac
-            done < _tmpfiles
-          else
-            echo "📌 No AI edits. Creating fallback file to force commit."
-            echo "AI found no required changes for issue #${{ github.event.issue.number }}" > fallback_${{ github.event.issue.number }}.txt
-          fi
-
-      - name: Commit & Push Changes
-        id: commit_step
+      - name: Commit & Push changes
         run: |
-          set -e
-
-          BRANCH="ai-force-${{ github.event.issue.number }}"
-          git checkout -b "$BRANCH" || git checkout "$BRANCH"
-
+          BRANCH_NAME=$(echo "${ISSUE_TITLE}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-30)
+          
+          git checkout -b "$BRANCH_NAME"
           git add .
+          
+          if git diff --cached --quiet; then
+            echo "⚠️ No changes detected — skipping PR"
+            exit 0
+          fi
+          
+          git commit -m "AI update for issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+          git push origin "$BRANCH_NAME"
 
-          git commit -m "AI Forced Commit for Issue #${{ github.event.issue.number }}" || echo "Nothing to commit"
-          git push origin "$BRANCH" --force || true
+      - name: Create Pull Request
+        run: |
+          BRANCH_NAME=$(echo "${ISSUE_TITLE}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-30)
 
-      - name: Open Pull Request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ai-force-${{ github.event.issue.number }}
-          base: ${{ github.event.repository.default_branch }}
-          title: "AI Auto PR - Issue #${{ github.event.issue.number }}"
-          body: |
-            This PR was created automatically by the AI Agent.
-
-            ### Issue:
-            ```
-            ${{ github.event.issue.body }}
-            ```
-
-            ### Notes:
-            - Branch created even if no AI changes
-            - Gemini 2.5 Flash used for reasoning
-            - Full automation mode enabled
+          curl -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/pulls \
+            -d "{
+              \"title\": \"Auto PR for Issue #$ISSUE_NUMBER: $ISSUE_TITLE\",
+              \"body\": \"$ISSUE_BODY\",
+              \"head\": \"$BRANCH_NAME\",
+              \"base\": \"main\"
+            }"
