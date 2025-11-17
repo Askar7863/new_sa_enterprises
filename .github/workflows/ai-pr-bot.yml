@@ -1,128 +1,108 @@
-name: AI PR Bot Automation
+name: Google CLI Auto-Engineer
 
 on:
   issues:
-    types: [opened, edited]
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
 
 jobs:
-  ai_pr_bot:
+  google-cli-autobot:
     runs-on: ubuntu-latest
 
-    permissions:
-      id-token: write
-      contents: write
-      pull-requests: write
-      issues: read
+    env:
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}  # Add your Gemini/Google AI key here
 
     steps:
-
-      - name: Checkout repository
+      - name: 🧩 Checkout repository
         uses: actions/checkout@v4
+
+      - name: 🧰 Set up Python environment
+        uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
+          python-version: "3.11"
 
-      - name: Authenticate with Google Cloud via OIDC
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: "projects/314154954531/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
-          service_account: "ai-issue-bot@ai-pr-project.iam.gserviceaccount.com"
-          token_format: access_token
-
-      - name: Set up Git user
+      - name: 📦 Install dependencies
         run: |
-          git config --global user.name "AI Issue Bot"
-          git config --global user.email "ai-issue-bot@users.noreply.github.com"
+          pip install google-generativeai gitpython pyyaml
 
-      - name: Run Gemini Agent (File Actions)
-        id: ai_step
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ISSUE_TEXT: ${{ github.event.issue.body }}
+      - name: ⚙️ Configure Git identity
         run: |
-          set -euo pipefail
-          echo "🔥 Running Gemini Agent"
+          git config --global user.name "google-cli-autobot"
+          git config --global user.email "actions@github.com"
 
-          SAFE_ISSUE=$(printf "%s" "$ISSUE_TEXT" | base64 -w 0)
-          DECODED=$(printf "%s" "$SAFE_ISSUE" | base64 --decode)
+      - name: 🧠 Run Google CLI automation
+        run: |
+          python <<'PYCODE'
+          import os, re, subprocess, google.generativeai as genai
+          from git import Repo
+          import textwrap
 
-          PAYLOAD=$(cat <<EOF
-          {
-            "contents":[{"parts":[{"text":"Return ONLY valid JSON. Format: {\"files\":[{\"path\":\"file\",\"action\":\"create|update|delete\",\"content\":\"...\"}]} If no changes, return {\"files\":[]}.\nIssue:\n$DECODED"}]}]
+          issue_title = os.getenv("ISSUE_TITLE")
+          issue_body = os.getenv("ISSUE_BODY")
+          repo_path = os.getcwd()
+          branch_name = re.sub(r'[^a-zA-Z0-9_-]', '-', issue_title.lower())[:40]
+
+          genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+          # 1️⃣ Generate instruction for Gemini
+          prompt = textwrap.dedent(f"""
+          You are an autonomous developer working inside the GitHub repo `{os.getenv('REPO_NAME')}`.
+          Based on this task description from the issue:
+          ---
+          {issue_body}
+          ---
+          Perform one of the following (whichever fits the request):
+          - Modify a single existing file.
+          - Add or remove files.
+          - Analyze and edit data files intelligently.
+          Produce complete working code for the required changes only — no explanations, no templates.
+          """)
+
+          model = genai.GenerativeModel("gemini-1.5-pro")
+          response = model.generate_content(prompt)
+
+          generated_code = response.text.strip()
+
+          # 2️⃣ Create new branch
+          repo = Repo(repo_path)
+          base = repo.heads.master if 'master' in repo.heads else repo.heads.main
+          repo.git.checkout(base)
+          new_branch = repo.create_head(branch_name)
+          new_branch.checkout()
+
+          # 3️⃣ Write changes (the AI-generated code will define what files to update)
+          # By default, we'll write to a file AI_CHANGES.md unless the instruction includes a path marker
+          file_path = "AI_CHANGES.md"
+          with open(file_path, "w", encoding="utf-8") as f:
+              f.write(generated_code)
+
+          repo.index.add([file_path])
+          repo.index.commit(f"🤖 Auto-update via issue #{os.getenv('ISSUE_NUMBER')}: {issue_title}")
+          repo.remote("origin").push(refspec=f"{branch_name}:{branch_name}")
+
+          # 4️⃣ Create a PR automatically
+          import requests
+          headers = {"Authorization": f"token {os.getenv('GITHUB_TOKEN')}"}
+          data = {
+              "title": f"Auto PR for Issue #{os.getenv('ISSUE_NUMBER')}: {issue_title}",
+              "body": f"This PR was automatically generated from issue #{os.getenv('ISSUE_NUMBER')}.\n\nTask:\n{issue_body}",
+              "head": branch_name,
+              "base": "main"
           }
-          EOF
-          )
+          pr_url = f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/pulls"
+          res = requests.post(pr_url, headers=headers, json=data)
+          print("PR created:", res.json().get("html_url"))
+          PYCODE
 
-          RESPONSE=$(curl -s -X POST \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY")
-
-          echo "$RESPONSE" > gemini_raw_response.json
-
-          TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // ""')
-
-          if ! echo "$TEXT" | jq empty >/dev/null 2>&1; then
-            echo "⚠ Using fallback"
-            TEXT='{"files":[]}'
-          fi
-
-          echo "$TEXT" > AI_RESPONSE.json
-
-          COUNT=$(echo "$TEXT" | jq '.files | length')
-
-          if [ "$COUNT" -gt 0 ]; then
-            echo "📁 Processing AI file instructions..."
-            echo "$TEXT" | jq -r '.files[] | @base64' > _tmpfiles
-            while IFS= read -r row; do
-              obj=$(echo "$row" | base64 --decode)
-              path=$(echo "$obj" | jq -r '.path')
-              action=$(echo "$obj" | jq -r '.action')
-              content=$(echo "$obj" | jq -r '.content // ""')
-
-              case "$action" in
-                create|update)
-                  mkdir -p "$(dirname "$path")"
-                  printf "%s" "$content" > "$path"
-                  ;;
-                delete)
-                  rm -f "$path"
-                  ;;
-              esac
-            done < _tmpfiles
-          else
-            echo "📌 No AI edits. Creating fallback file to force commit."
-            echo "AI found no required changes for issue #${{ github.event.issue.number }}" > fallback_${{ github.event.issue.number }}.txt
-          fi
-
-      - name: Commit & Push Changes
-        id: commit_step
-        run: |
-          set -e
-
-          BRANCH="ai-force-${{ github.event.issue.number }}"
-          git checkout -b "$BRANCH" || git checkout "$BRANCH"
-
-          git add .
-
-          git commit -m "AI Forced Commit for Issue #${{ github.event.issue.number }}" || echo "Nothing to commit"
-          git push origin "$BRANCH" --force || true
-
-      - name: Open Pull Request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ai-force-${{ github.event.issue.number }}
-          base: ${{ github.event.repository.default_branch }}
-          title: "AI Auto PR - Issue #${{ github.event.issue.number }}"
-          body: |
-            This PR was created automatically by the AI Agent.
-
-            ### Issue:
-            ```
-            ${{ github.event.issue.body }}
-            ```
-
-            ### Notes:
-            - Branch created even if no AI changes
-            - Gemini 2.5 Flash used for reasoning
-            - Full automation mode enabled
+      - name: ✅ Print completion message
+        run: echo "✅ Google CLI automation complete. PR created for issue #${{ github.event.issue.number }}."
