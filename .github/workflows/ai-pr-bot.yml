@@ -43,55 +43,54 @@ jobs:
         run: |
           pip install google-cloud-aiplatform
 
-      # -----------------------------
-      # 5️⃣ Run Gemini Flash 2.5
-      # -----------------------------
       - name: Run Gemini model
-        run: |
-          python3 << 'EOF'
-          import os, json, re
-          from google.cloud import aiplatform
+  run: |
+    python3 << 'EOF'
+    import os, json, re
+    from google.cloud import aiplatform
 
-          PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-          ISSUE_TITLE = "${{ github.event.issue.title }}"
-          ISSUE_BODY = "${{ github.event.issue.body }}"
+    PROJECT_ID = "${{ secrets.GCP_PROJECT_ID }}"
 
-          # Init Vertex AI
-          aiplatform.init(project=PROJECT_ID, location="us-central1")
+    # Escape everything safely using triple quotes
+    ISSUE_TITLE = """${{ github.event.issue.title }}"""
+    ISSUE_BODY  = """${{ github.event.issue.body }}"""
 
-          model = aiplatform.GenerativeModel("gemini-1.5-flash-002")
+    aiplatform.init(project=PROJECT_ID, location="us-central1")
 
-          prompt = f"""
-          You are an autonomous code generator.
-          Task: {ISSUE_BODY}
+    model = aiplatform.GenerativeModel("gemini-1.5-flash-002")
 
-          Respond ONLY in JSON:
-          {{
-            "file_path": "path/to/file",
-            "new_content": "<full file content>"
-          }}
-          """
+    prompt = f"""
+    You are an autonomous code generator.
+    Task from the GitHub Issue:
 
-          response = model.generate_content(prompt)
-          print("RAW MODEL OUTPUT:", response.text)
+    {ISSUE_BODY}
 
-          try:
-              data = json.loads(response.text)
-          except:
-              raise SystemExit(f"INVALID JSON from Gemini: {response.text}")
+    Respond ONLY in JSON:
+    {{
+      "file_path": "<path/to/file>",
+      "new_content": "<full updated file>"
+    }}
+    """
 
-          file_path = data["file_path"]
-          content = data["new_content"]
+    response = model.generate_content(prompt)
+    print("RAW MODEL OUTPUT:", response.text)
 
-          # create folder if needed
-          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    try:
+        data = json.loads(response.text)
+    except Exception as e:
+        raise SystemExit("❌ INVALID JSON from Gemini:\n" + response.text)
 
-          # write file
-          with open(file_path, "w") as f:
-              f.write(content)
+    file_path = data["file_path"]
+    content = data["new_content"]
 
-          print("UPDATED:", file_path)
-          EOF
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+    with open(file_path, "w") as f:
+        f.write(content)
+
+    print("✅ Updated file:", file_path)
+    EOF
+
 
       # -----------------------------
       # 6️⃣ Commit & Push
