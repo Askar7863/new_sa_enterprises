@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       # 1️⃣ Checkout repository
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -31,122 +30,107 @@ jobs:
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
           python3 << 'EOF'
-import os, json, requests, tiktoken
+          import os, json, requests, tiktoken
 
-API_KEY = os.getenv("GEMINI_API_KEY")
-ISSUE_TITLE = os.getenv("ISSUE_TITLE")
-ISSUE_BODY  = os.getenv("ISSUE_BODY")
+          API_KEY = os.getenv("GEMINI_API_KEY")
+          ISSUE_TITLE = os.getenv("ISSUE_TITLE")
+          ISSUE_BODY  = os.getenv("ISSUE_BODY")
 
-# --------------------------------------
-# STEP 1: Read full repository
-# --------------------------------------
+          # STEP 1: Read repo
+          repo_files = []
+          for root, _, files in os.walk("."):
+              for f in files:
+                  if f.startswith(".git"):
+                      continue
+                  path = os.path.join(root, f)
+                  try:
+                      with open(path, "r", errors="ignore") as fp:
+                          repo_files.append({
+                              "path": path,
+                              "content": fp.read()
+                          })
+                  except:
+                      continue
 
-repo_files = []
+          # STEP 2: Chunk repo
+          MAX_CHARS = 8000
+          chunks = []
+          current = ""
 
-for root, _, files in os.walk("."):
-    for f in files:
-        if f.startswith(".git"):
-            continue
-        path = os.path.join(root, f)
-        try:
-            with open(path, "r", errors="ignore") as fp:
-                content = fp.read()
-                repo_files.append({
-                    "path": path,
-                    "content": content
-                })
-        except:
-            continue
+          for file in repo_files:
+              text = f"\nFILE: {file['path']}\nCONTENT:\n{file['content']}\n"
+              if len(current) + len(text) > MAX_CHARS:
+                  chunks.append(current)
+                  current = ""
+              current += text
 
-# --------------------------------------
-# STEP 2: Chunk repository
-# --------------------------------------
+          if current:
+              chunks.append(current)
 
-MAX_CHARS = 8000
-chunks = []
-current = ""
+          CHUNK_TEXT = "\n---\n".join(
+              [f"[CHUNK {i+1}]\n{c}" for i, c in enumerate(chunks)]
+          )
 
-for file in repo_files:
-    text = f"\nFILE: {file['path']}\nCONTENT:\n{file['content']}\n"
-    if len(current) + len(text) > MAX_CHARS:
-        chunks.append(current)
-        current = ""
-    current += text
+          # STEP 3: Prompt
+          prompt = f"""
+          You are an autonomous senior software engineer.
+          Apply modifications to the repo based on:
 
-if current:
-    chunks.append(current)
+          Issue Title:
+          {ISSUE_TITLE}
 
-# --------------------------------------
-# STEP 3: Build Gemini prompt
-# --------------------------------------
+          Issue Body:
+          {ISSUE_BODY}
 
-CHUNK_TEXT = "\n---\n".join([f"[CHUNK {i+1}]\n{c}" for i, c in enumerate(chunks)])
+          Repository Chunks:
+          {CHUNK_TEXT}
 
-prompt = f"""
-You are an autonomous senior software engineer.
-Analyze the ENTIRE repository and implement modifications.
+          Return JSON ONLY:
+          {{
+            "changes": [
+              {{
+                "path": "relative/path",
+                "content": "new file content"
+              }}
+            ]
+          }}
+          """
 
-Issue Title:
-{ISSUE_TITLE}
+          # STEP 4: Call Gemini API
+          url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + API_KEY
+          payload = {
+              "contents": [
+                  {"parts": [{"text": prompt}]}
+              ]
+          }
 
-Issue Description:
-{ISSUE_BODY}
+          response = requests.post(url, json=payload)
+          resp = response.json()
 
-Repository Chunks:
-{CHUNK_TEXT}
+          print("RAW RESPONSE:", json.dumps(resp, indent=2))
 
-Return JSON ONLY:
-{{
-  "changes": [
-    {{
-      "path": "relative/path",
-      "content": "new file content"
-    }}
-  ]
-}}
-"""
+          try:
+              text_output = resp["candidates"][0]["content"]["parts"][0]["text"]
+          except:
+              raise SystemExit("❌ Gemini returned invalid structure")
 
-# --------------------------------------
-# STEP 4: Call Gemini API
-# --------------------------------------
+          try:
+              data = json.loads(text_output)
+          except:
+              raise SystemExit("❌ Gemini output was NOT JSON:\n" + text_output)
 
-url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + API_KEY
-payload = {
-    "contents": [
-        {"parts": [{"text": prompt}]}
-    ]
-}
+          # STEP 5: Apply changes
+          for change in data["changes"]:
+              path = change["path"]
+              content = change["content"]
 
-response = requests.post(url, json=payload)
-resp = response.json()
+              os.makedirs(os.path.dirname(path), exist_ok=True)
+              with open(path, "w") as f:
+                  f.write(content)
 
-print("RAW RESPONSE:", json.dumps(resp, indent=2))
+              print("✔ Modified:", path)
 
-try:
-    text_output = resp["candidates"][0]["content"]["parts"][0]["text"]
-except:
-    raise SystemExit("❌ Gemini returned invalid response")
-
-try:
-    data = json.loads(text_output)
-except:
-    raise SystemExit("❌ Gemini returned NON-JSON:\n" + text_output)
-
-# --------------------------------------
-# STEP 5: Apply changes
-# --------------------------------------
-
-for change in data["changes"]:
-    path = change["path"]
-    content = change["content"]
-
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write(content)
-
-    print("✔ Modified:", path)
-
-EOF
+          EOF
 
       # 4️⃣ Commit changes
       - name: Commit changes
