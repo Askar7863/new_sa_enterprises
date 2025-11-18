@@ -1,4 +1,4 @@
-name: Gemini Auto Dev (API Key)
+name: Gemini Full Repo Auto Dev
 
 on:
   issues:
@@ -14,52 +14,112 @@ jobs:
 
     steps:
 
-    # 1️⃣ Checkout repository
+    # 1️⃣ Checkout full repository
     - name: Checkout repo
       uses: actions/checkout@v4
 
-    # 2️⃣ Install Python deps
+    # 2️⃣ Install dependencies
     - name: Install dependencies
       run: |
-        pip install requests
+        pip install requests tiktoken
 
-    # 3️⃣ Run Gemini 2.5 Flash using API KEY
-    - name: Run Gemini model
+    # 3️⃣ Run Gemini with full repo context
+    - name: Run Full-Repo Gemini Agent
       env:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        RAW_ISSUE_TITLE: ${{ github.event.issue.title }}
-        RAW_ISSUE_BODY: ${{ github.event.issue.body }}
+        ISSUE_TITLE: ${{ github.event.issue.title }}
+        ISSUE_BODY: ${{ github.event.issue.body }}
       run: |
         python3 << 'EOF'
-import os, json, requests, re
+import os, json, requests, base64, tiktoken
 
 API_KEY = os.getenv("GEMINI_API_KEY")
-ISSUE_TITLE = os.getenv("RAW_ISSUE_TITLE")
-ISSUE_BODY  = os.getenv("RAW_ISSUE_BODY")
+ISSUE_TITLE = os.getenv("ISSUE_TITLE")
+ISSUE_BODY = os.getenv("ISSUE_BODY")
 
-url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + API_KEY
+# --------------------------------------
+# STEP 1: Read full repository
+# --------------------------------------
+
+repo_files = []
+
+for root, _, files in os.walk("."):
+    for f in files:
+        if f.startswith(".git"):
+            continue
+        path = os.path.join(root, f)
+        try:
+            with open(path, "r", errors="ignore") as fp:
+                content = fp.read()
+                repo_files.append({
+                    "path": path,
+                    "content": content
+                })
+        except:
+            continue
+
+# --------------------------------------
+# STEP 2: Chunk repository
+# --------------------------------------
+
+MAX_CHARS = 8000  # safe per chunk for Gemini 2.5 Flash
+chunks = []
+current = ""
+
+for file in repo_files:
+    text = f"\nFILE: {file['path']}\nCONTENT:\n{file['content']}\n"
+    if len(current) + len(text) > MAX_CHARS:
+        chunks.append(current)
+        current = ""
+    current += text
+
+if current:
+    chunks.append(current)
+
+# --------------------------------------
+# STEP 3: Build prompt for Gemini
+# --------------------------------------
+
+CHUNK_TEXT = "\n---\n".join([f"[CHUNK {i+1}]\n{c}" for i, c in enumerate(chunks)])
 
 prompt = f"""
-You are an autonomous senior AI engineer.
+You are an autonomous senior software engineer.
+You have access to the ENTIRE repository, delivered in chunks below.
 
-Modify the GitHub repository based on this issue:
-
-TITLE:
+Issue Title:
 {ISSUE_TITLE}
 
-DESCRIPTION:
+Issue Description:
 {ISSUE_BODY}
 
-Return STRICT JSON only:
+Full Repository (chunked):
+{CHUNK_TEXT}
+
+Your job:
+1. Understand the issue
+2. Review the entire repo
+3. Modify ANY number of files as needed
+4. Return STRICT JSON ONLY:
+
 {{
   "changes": [
     {{
       "path": "relative/path/to/file",
-      "content": "full updated content"
+      "content": "full NEW content of file"
     }}
   ]
 }}
+
+Do NOT include explanations.
+Do NOT include markdown.
+Return ONLY raw JSON.
 """
+
+# --------------------------------------
+# STEP 4: Call Gemini 2.5 Flash
+# --------------------------------------
+
+url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + API_KEY
 
 payload = {
     "contents": [
@@ -69,51 +129,60 @@ payload = {
 
 response = requests.post(url, json=payload)
 resp = response.json()
-print("RAW MODEL OUTPUT:", json.dumps(resp, indent=2))
+
+print("RAW RESPONSE:", json.dumps(resp, indent=2))
 
 try:
-    text = resp["candidates"][0]["content"]["parts"][0]["text"]
+    text_output = resp["candidates"][0]["content"]["parts"][0]["text"]
 except:
-    raise SystemExit("❌ Gemini Error:\n" + json.dumps(resp, indent=2))
+    raise SystemExit("❌ Gemini returned invalid structure")
 
-# Load JSON
+# --------------------------------------
+# STEP 5: Parse JSON output
+# --------------------------------------
+
 try:
-    data = json.loads(text)
+    data = json.loads(text_output)
 except:
-    raise SystemExit("❌ Gemini returned invalid JSON:\n" + text)
+    raise SystemExit("❌ Gemini returned NON-JSON:\n" + text_output)
 
-# Apply changes
+# --------------------------------------
+# STEP 6: Apply file changes
+# --------------------------------------
+
 for change in data["changes"]:
     path = change["path"]
     content = change["content"]
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
+
     with open(path, "w") as f:
         f.write(content)
 
-    print("✔ Updated:", path)
+    print("✔ Modified:", path)
 
 EOF
 
-    # 4️⃣ Commit changes
+    # 4️⃣ Commit & Push Results
     - name: Commit changes
       run: |
-        BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-40)
+        BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-50)
+
         git checkout -b "$BRANCH"
         git add .
 
         if git diff --cached --quiet; then
-          echo "⚠️ No changes detected — skipping PR"
+          echo "⚠️ No AI changes — skip PR"
           exit 0
         fi
 
-        git commit -m "AI Update for Issue #${{ github.event.issue.number }}"
+        git commit -m "AI update for issue #${{ github.event.issue.number }}"
         git push origin "$BRANCH"
 
     # 5️⃣ Create PR
     - name: Create PR
       run: |
-        BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-40)
+        BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-50)
 
         curl -X POST \
           -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
@@ -121,7 +190,7 @@ EOF
           https://api.github.com/repos/${{ github.repository_owner }}/${{ github.event.repository.name }}/pulls \
           -d "{
             \"title\": \"AI PR: ${{ github.event.issue.title }}\",
-            \"body\": \"Generated by Gemini 2.5 Flash via API Key\",
+            \"body\": \"Generated by Gemini Full Repo AI Agent\",
             \"head\": \"$BRANCH\",
             \"base\": \"main\"
           }"
