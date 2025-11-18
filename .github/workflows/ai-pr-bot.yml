@@ -1,4 +1,4 @@
-name: Vertex AI Gemini Auto Dev
+name: Gemini Auto Dev (API Key)
 
 on:
   issues:
@@ -14,131 +14,114 @@ jobs:
 
     steps:
 
-      # 1️⃣ Checkout repository
-      - name: Checkout repo
-        uses: actions/checkout@v4
+    # 1️⃣ Checkout repository
+    - name: Checkout repo
+      uses: actions/checkout@v4
 
-      # 2️⃣ Authenticate with Google Cloud
-      - name: Google Auth
-        id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+    # 2️⃣ Install Python deps
+    - name: Install dependencies
+      run: |
+        pip install requests
 
-      # 3️⃣ Install gcloud
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
+    # 3️⃣ Run Gemini 2.5 Flash using API KEY
+    - name: Run Gemini model
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        RAW_ISSUE_TITLE: ${{ github.event.issue.title }}
+        RAW_ISSUE_BODY: ${{ github.event.issue.body }}
+      run: |
+        python3 << 'EOF'
+import os, json, requests, re
 
-      # 4️⃣ Install Vertex AI SDK
-      - name: Install dependencies
-        run: |
-          pip install google-cloud-aiplatform
+API_KEY = os.getenv("GEMINI_API_KEY")
+ISSUE_TITLE = os.getenv("RAW_ISSUE_TITLE")
+ISSUE_BODY  = os.getenv("RAW_ISSUE_BODY")
 
-      # 5️⃣ Run Gemini 2.5 Flash (Generative API)
-      - name: Run Gemini model
-        env:
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-          RAW_ISSUE_TITLE: ${{ github.event.issue.title }}
-          RAW_ISSUE_BODY: ${{ github.event.issue.body }}
-        run: |
-          python3 << 'EOF'
-          import os, json
-          from google.cloud import aiplatform
+url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + API_KEY
 
-          PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-          ISSUE_TITLE = os.getenv("RAW_ISSUE_TITLE")
-          ISSUE_BODY  = os.getenv("RAW_ISSUE_BODY")
+prompt = f"""
+You are an autonomous senior AI engineer.
 
-          # Escape GH strings safely
-          ISSUE_TITLE = json.loads(json.dumps(ISSUE_TITLE))
-          ISSUE_BODY  = json.loads(json.dumps(ISSUE_BODY))
+Modify the GitHub repository based on this issue:
 
-          # Init Vertex AI (Generative API)
-          aiplatform.init(project=PROJECT_ID, location="us-central1")
+TITLE:
+{ISSUE_TITLE}
 
-          model = aiplatform.GenerativeModel("gemini-2.5-flash")
+DESCRIPTION:
+{ISSUE_BODY}
 
-          # Agent instruction
-          prompt = f"""
-          You are an autonomous senior AI engineer.
-          You will modify the GitHub repository code according to this issue:
+Return STRICT JSON only:
+{{
+  "changes": [
+    {{
+      "path": "relative/path/to/file",
+      "content": "full updated content"
+    }}
+  ]
+}}
+"""
 
-          ISSUE TITLE:
-          {ISSUE_TITLE}
+payload = {
+    "contents": [
+        {"parts": [{"text": prompt}]}
+    ]
+}
 
-          ISSUE BODY:
-          {ISSUE_BODY}
+response = requests.post(url, json=payload)
+resp = response.json()
+print("RAW MODEL OUTPUT:", json.dumps(resp, indent=2))
 
-          Perform these steps:
-          1. Understand the task
-          2. Modify, create, or delete any necessary files
-          3. Return EXACT JSON with:
-          {{
-            "changes": [
-              {{
-                "path": "relative/path/to/file",
-                "content": "new full content of this file"
-              }}
-            ]
-          }}
+try:
+    text = resp["candidates"][0]["content"]["parts"][0]["text"]
+except:
+    raise SystemExit("❌ Gemini Error:\n" + json.dumps(resp, indent=2))
 
-          No explanations. Only return JSON.
-          """
+# Load JSON
+try:
+    data = json.loads(text)
+except:
+    raise SystemExit("❌ Gemini returned invalid JSON:\n" + text)
 
-          response = model.generate_content(prompt)
+# Apply changes
+for change in data["changes"]:
+    path = change["path"]
+    content = change["content"]
 
-          raw = response.text
-          print("RAW MODEL OUTPUT:", raw)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
 
-          # Parse JSON
-          try:
-              data = json.loads(raw)
-          except Exception:
-              raise SystemExit("❌ Gemini returned invalid JSON:\n" + raw)
+    print("✔ Updated:", path)
 
-          # Apply changes
-          for change in data["changes"]:
-              path = change["path"]
-              content = change["content"]
+EOF
 
-              os.makedirs(os.path.dirname(path), exist_ok=True)
-              with open(path, "w") as f:
-                  f.write(content)
+    # 4️⃣ Commit changes
+    - name: Commit changes
+      run: |
+        BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-40)
+        git checkout -b "$BRANCH"
+        git add .
 
-              print("✔ Updated:", path)
+        if git diff --cached --quiet; then
+          echo "⚠️ No changes detected — skipping PR"
+          exit 0
+        fi
 
-          EOF
+        git commit -m "AI Update for Issue #${{ github.event.issue.number }}"
+        git push origin "$BRANCH"
 
-      # 6️⃣ Commit and Push
-      - name: Commit changes
-        run: |
-          BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-40)
+    # 5️⃣ Create PR
+    - name: Create PR
+      run: |
+        BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-40)
 
-          git checkout -b "$BRANCH"
-          git add .
-
-          if git diff --cached --quiet; then
-            echo "⚠️ No changes detected — skipping PR"
-            exit 0
-          fi
-
-          git commit -m "AI Update for Issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}"
-          git push origin "$BRANCH"
-
-      # 7️⃣ Create PR
-      - name: Create PR
-        run: |
-          BRANCH=$(echo "${{ github.event.issue.title }}" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-40)
-
-          curl -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository_owner }}/${{ github.event.repository.name }}/pulls \
-            -d "{
-              \"title\": \"AI PR: ${{ github.event.issue.title }}\",
-              \"body\": \"Automatically generated by Gemini 2.5 Flash from Issue #${{ github.event.issue.number }}\",
-              \"head\": \"$BRANCH\",
-              \"base\": \"main\"
-            }"
+        curl -X POST \
+          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/${{ github.repository_owner }}/${{ github.event.repository.name }}/pulls \
+          -d "{
+            \"title\": \"AI PR: ${{ github.event.issue.title }}\",
+            \"body\": \"Generated by Gemini 2.5 Flash via API Key\",
+            \"head\": \"$BRANCH\",
+            \"base\": \"main\"
+          }"
