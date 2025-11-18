@@ -6,7 +6,7 @@
 
 ## Task Description
 
-create log in page 
+Completed the transformation of the project into the "SA Enterprises" e-commerce website, including attractive UI, user-friendly features, and integration of contact information and reporting.
 
 
 ---

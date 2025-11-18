@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <h1 class="mb-4 text-primary">Contact {{ shop_name }}</h1>
+
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <div class="card shadow">
+                <div class="card-body">
+                    <h2 class="card-title"><i class="bi bi-headset me-2"></i> Get in Touch</h2>
+                    <p class="lead">We're here to help! Reach out to us through the following channels:</p>
+                    <ul class="list-unstyled contact-info">
+                        <li class="mb-2">
+                            <i class="bi bi-envelope-fill me-2 text-primary"></i>
+                            <strong>Email:</strong> <a href="mailto:{{ contact_email }}" class="text-decoration-none">{{ contact_email }}</a>
+                        </li>
+                        <li class="mb-2">
+                            <i class="bi bi-telephone-fill me-2 text-primary"></i>
+                            <strong>Phone:</strong> <a href="tel:{{ contact_phone }}" class="text-decoration-none">{{ contact_phone }}</a>
+                        </li>
+                        <li class="mb-2">
+                            <i class="bi bi-geo-alt-fill me-2 text-primary"></i>
+                            <strong>Address:</strong> 123 E-commerce St, SA City, SA 12345
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <section id="report-section" class="card shadow">
+                <div class="card-body">
+                    <h2 class="card-title"><i class="bi bi-bug-fill me-2"></i> Report an Issue</h2>
+                    <p class="text-muted">Encountered a problem or have a suggestion? Let us know!</p>
+                    <form id="report-form">
+                        <div class="form-group mb-3">
+                            <label for="report-subject" class="form-label">Subject</label>
+                            <input type="text" id="report-subject" name="subject" class="form-control" required placeholder="Brief summary of the issue">
+                        </div>
+                        <div class="form-group mb-3">
+                            <label for="report-description" class="form-label">Description</label>
+                            <textarea id="report-description" name="description" rows="5" class="form-control" required placeholder="Detailed description of the issue..."></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary"><i class="bi bi-upload me-2"></i> Submit Report</button>
+                        <div id="report-status" class="status-message mt-3"></div>
+                    </form>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <hr class="my-5">
+
+    <section id="chatbot-section" class="card shadow mb-5">
+        <div class="card-body">
+            <h2 class="card-title"><i class="bi bi-chat-dots-fill me-2"></i> Chat with our Assistant</h2>
+            <p class="text-muted">Ask our automated assistant common questions about {{ shop_name }}.</p>
+            <div class="chat-window" id="chat-window">
+                <div class="message bot-message">
+                    <p>Hello! I'm your Project Assistant for {{ shop_name }}. How can I help you today?</p>
+                    <span class="timestamp" id="initial-bot-timestamp"></span>
+                </div>
+            </div>
+            <div class="chat-input-area mt-3">
+                <input type="text" id="user-message" placeholder="Type your message..." class="form-control">
+                <button id="send-button" class="btn btn-success"><i class="bi bi-send-fill me-2"></i> Send</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Script for chatbot and report form -->
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+{% endblock %}

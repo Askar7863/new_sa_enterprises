@@ -49,7 +49,7 @@
                             {{ form.zip_code.label(class="form-label") }}
                             {{ form.zip_code(class="form-control") }}
                             {% if form.zip_code.errors %}
-                                <div class="invalid-feedback d-block">{% for error in form.zip_code.errors %}{{ error }}{{% endfor %}</div>
+                                <div class="invalid-feedback d-block">{% for error in form.zip_code.errors %}{{ error }}{% endfor %}</div>
                             {% endif %}
                         </div>
                         <div class="col-md-6">

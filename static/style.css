@@ -1,54 +1,217 @@
-/* Custom styles for E-Shop */
+/* Custom styles for SA Enterprises E-commerce */
 
+/* --- Variables for a consistent blue theme (from static/css/style.css) --- */
+:root {
+    --primary-blue: #3498db;     /* Main interactive blue */
+    --secondary-blue: #2980b9;   /* Darker blue for accents/hover */
+    --accent-blue: #87ceeb;      /* Sky blue for highlights */
+    --light-bg: #ecf0f1;         /* Light grey for overall background */
+    --dark-text: #2c3e50;        /* Dark blue-grey for main text */
+    --light-text: #f0f6fa;       /* Off-white for text on dark backgrounds */
+    --card-bg: #ffffff;          /* White for card backgrounds */
+    --border-color: #ddd;        /* Light grey for borders */
+    --success-color: #27ae60;    /* Green for success messages */
+    --error-color: #c0392b;      /* Red for error messages */
+    --shadow-light: rgba(0, 0, 0, 0.1);   /* Light shadow for depth */
+    --shadow-medium: rgba(0, 0, 0, 0.15); /* Medium shadow for cards */
+}
+
+/* --- General Body Styles (from static/css/style.css, adapted) --- */
 body {
-    font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    min-height: 100vh;
-    position: relative;
+    font-family: 'Roboto', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: var(--light-bg);
+    color: var(--dark-text);
+    line-height: 1.6;
+    display: flex;
+    flex-direction: column; /* For sticky footer */
+    min-height: 100vh;      /* Full viewport height */
     padding-bottom: 80px; /* Height of the footer */
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+    width: 100%;
+    box-sizing: border-box; /* Ensures padding doesn't add to total width */
+}
+
+/* --- Navbar Adjustments (from base.html, styled with blue theme) --- */
+.navbar {
+    background-color: var(--dark-text) !important; /* Dark blue-grey for navbar */
+    box-shadow: 0 2px 4px var(--shadow-light);
 }
 
 .navbar-brand {
     font-weight: bold;
-    font-size: 1.5rem;
+    font-size: 1.75rem; /* Slightly larger */
+    color: var(--accent-blue) !important; /* Accent color for brand */
+    transition: color 0.3s ease;
+}
+.navbar-brand:hover {
+    color: var(--light-text) !important;
+}
+
+.navbar-nav .nav-link {
+    color: var(--light-text) !important;
+    font-weight: 400;
+    transition: color 0.3s ease;
+}
+
+.navbar-nav .nav-link:hover,
+.navbar-nav .nav-link.active {
+    color: var(--accent-blue) !important;
+}
+
+.navbar-nav .nav-link .bi {
+    margin-right: 5px;
+}
+
+/* --- Main Content Layout (from static/css/style.css) --- */
+/* No grid template for main section directly, relying on Bootstrap row/col */
+main {
+    flex-grow: 1; /* Allows main content to fill available space */
+    padding-top: 20px;
+    padding-bottom: 20px;
+}
+
+/* --- Card Styles (combined from both, prioritizing blue theme) --- */
+.card {
+    background-color: var(--card-bg);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px var(--shadow-medium);
+    padding: 20px; /* Adjusted default padding */
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    border: none; /* Remove default Bootstrap border */
+    border-top: 5px solid var(--primary-blue); /* Decorative top border */
+}
+
+.card:hover {
+    transform: translateY(-5px); /* Subtle lift effect on hover */
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2); /* Enhanced shadow on hover */
+}
+
+.card-title {
+    color: var(--secondary-blue);
+    font-size: 1.5em; /* Adjusted for Bootstrap context */
+    margin-top: 0;
+    margin-bottom: 15px;
 }
 
 .card-img-top {
     height: 200px; /* Fixed height for product images */
     object-fit: cover;
     width: 100%;
+    border-top-left-radius: calc(8px - 5px); /* Match card border radius */
+    border-top-right-radius: calc(8px - 5px);
 }
 
-.card {
-    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
-}
-
-.card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15) !important;
-}
-
-.jumbotron {
-    background-color: #f8f9fa;
-    padding: 3rem;
-    border-radius: .5rem;
-}
-
-/* Form styling for better readability */
+/* --- Form styling for better readability (from static/style.css, adapted) --- */
 .form-label {
-    font-weight: 500;
+    font-weight: 700; /* Bolder labels */
+    color: var(--dark-text);
+    margin-bottom: 8px;
 }
 
-/* Footer adjustments */
-.footer {
-    position: absolute;
-    bottom: 0;
-    width: 100%;
-    /* Set the fixed height of the footer here */
-    height: 60px;
-    line-height: 60px; /* Vertically center the text there */
+.form-control,
+.form-select,
+.input-group-text {
+    border-color: var(--border-color);
+    border-radius: 8px; /* Rounded inputs */
+    padding: 10px 15px;
 }
 
-/* Specific badge colors for order status */
+.form-control:focus,
+.form-select:focus {
+    border-color: var(--primary-blue);
+    box-shadow: 0 0 0 0.25rem rgba(52, 152, 219, 0.25); /* Focus ring */
+    outline: none;
+}
+
+/* --- Button Base Styles (from static/css/style.css, adapted for Bootstrap) --- */
+.btn {
+    padding: 10px 20px; /* Adjusted padding */
+    border: none;
+    border-radius: 25px; /* More rounded buttons */
+    cursor: pointer;
+    font-size: 1em;
+    font-weight: 700;
+    transition: background-color 0.3s ease, transform 0.2s ease, box-shadow 0.3s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.btn .bi { /* Using Bootstrap Icons */
+    margin-right: 8px;
+}
+
+.btn-primary {
+    background-color: var(--primary-blue) !important;
+    color: var(--light-text) !important;
+    border-color: var(--primary-blue) !important;
+}
+
+.btn-primary:hover {
+    background-color: var(--secondary-blue) !important;
+    border-color: var(--secondary-blue) !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.btn-success {
+    background-color: var(--success-color) !important;
+    color: var(--light-text) !important;
+    border-color: var(--success-color) !important;
+}
+
+.btn-success:hover {
+    background-color: #219653 !important; /* Slightly darker green */
+    border-color: #219653 !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.btn-danger {
+    background-color: var(--error-color) !important;
+    color: var(--light-text) !important;
+    border-color: var(--error-color) !important;
+}
+
+.btn-danger:hover {
+    background-color: #a72d21 !important; /* Slightly darker red */
+    border-color: #a72d21 !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.btn-info {
+    background-color: #0dcaf0 !important;
+    color: #212529 !important; /* Dark text for info */
+    border-color: #0dcaf0 !important;
+}
+
+.btn-info:hover {
+    background-color: #0aa2c2 !important;
+    border-color: #0aa2c2 !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.btn-outline-secondary {
+    color: var(--dark-text) !important;
+    border-color: var(--border-color) !important;
+}
+
+.btn-outline-secondary:hover {
+    color: var(--primary-blue) !important;
+    border-color: var(--primary-blue) !important;
+    background-color: var(--light-bg) !important;
+}
+
+/* Specific badge colors for order status (from static/style.css) */
 .badge.bg-pending {
     background-color: #ffc107 !important; /* warning */
     color: #212529; /* dark text */
@@ -60,9 +223,202 @@ body {
     background-color: #0d6efd !important; /* primary */
 }
 .badge.bg-delivered {
-    background-color: #198754 !important; /* success */
+    background-color: var(--success-color) !important; /* success */
 }
 .badge.bg-cancelled {
-    background-color: #dc3545 !important; /* danger */
+    background-color: var(--error-color) !important; /* danger */
 }
 
+
+/* --- Chatbot Section Styles (from static/css/style.css) --- */
+.chat-window {
+    height: 400px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 15px;
+    overflow-y: auto; /* Scroll for long conversations */
+    margin-bottom: 20px;
+    background-color: var(--light-bg);
+    display: flex;
+    flex-direction: column;
+}
+
+.message {
+    max-width: 80%;
+    padding: 10px 15px;
+    border-radius: 20px;
+    margin-bottom: 10px;
+    position: relative;
+    word-wrap: break-word; /* Prevents overflow for long words */
+    font-size: 0.95em;
+}
+
+.user-message {
+    background-color: var(--primary-blue);
+    color: var(--light-text);
+    align-self: flex-end; /* Aligns user messages to the right */
+    border-bottom-right-radius: 5px; /* Aesthetic touch */
+}
+
+.bot-message {
+    background-color: var(--secondary-blue);
+    color: var(--light-text);
+    align-self: flex-start; /* Aligns bot messages to the left */
+    border-bottom-left-radius: 5px; /* Aesthetic touch */
+}
+
+.message p {
+    margin: 0;
+}
+
+.message .timestamp {
+    display: block;
+    font-size: 0.75em;
+    color: rgba(255, 255, 255, 0.7); /* Lighter timestamp for readability */
+    margin-top: 5px;
+    text-align: right;
+}
+
+.bot-message .timestamp {
+    text-align: left;
+}
+
+.chat-input-area {
+    display: flex;
+    gap: 10px;
+}
+
+#user-message {
+    flex-grow: 1;
+    padding: 12px 15px;
+    border: 1px solid var(--border-color);
+    border-radius: 25px;
+    font-size: 1em;
+    transition: border-color 0.3s ease;
+}
+
+#user-message:focus {
+    outline: none;
+    border-color: var(--primary-blue);
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.3); /* Focus ring */
+}
+
+
+/* --- Report Section Styles (from static/css/style.css) --- */
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 700;
+    color: var(--dark-text);
+}
+
+.form-group input[type="text"],
+.form-group textarea {
+    width: 100%;
+    padding: 12px 15px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 1em;
+    box-sizing: border-box; /* Crucial for consistent width */
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.form-group input[type="text"]:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: var(--primary-blue);
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.3);
+}
+
+.form-group textarea {
+    resize: vertical; /* Allows vertical resizing only */
+    min-height: 100px;
+}
+
+.status-message {
+    margin-top: 15px;
+    padding: 10px 15px;
+    border-radius: 5px;
+    font-weight: 700;
+    display: none; /* Hidden by default, shown via JS */
+    text-align: center;
+}
+
+.status-message.success {
+    background-color: var(--success-color);
+    color: var(--light-text);
+}
+
+.status-message.error {
+    background-color: var(--error-color);
+    color: var(--light-text);
+}
+
+/* --- Footer adjustments (from static/style.css, styled with blue theme) --- */
+.footer {
+    position: absolute;
+    bottom: 0;
+    width: 100%;
+    height: 80px; /* Increased height for contact info */
+    line-height: normal; /* Allow multiple lines */
+    background-color: var(--dark-text) !important;
+    color: var(--light-text) !important;
+    padding: 15px 0; /* Add padding for content */
+    box-shadow: 0 -2px 4px var(--shadow-light);
+}
+.footer .container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+}
+.footer p, .footer a {
+    color: var(--light-text);
+    margin-bottom: 5px;
+    text-decoration: none;
+}
+.footer a:hover {
+    color: var(--accent-blue);
+}
+
+
+/* --- Responsive Adjustments (from static/css/style.css) --- */
+@media (max-width: 767px) {
+    .navbar-brand {
+        font-size: 1.5rem;
+    }
+    .header-content { /* Assuming a similar structure might be used */
+        flex-direction: column;
+        text-align: center;
+    }
+    .navbar-nav {
+        text-align: center;
+    }
+    .navbar-nav .nav-item {
+        margin: 5px 0;
+    }
+    .container {
+        padding: 15px;
+    }
+    .card {
+        padding: 15px;
+    }
+    .chat-window {
+        height: 300px; /* Smaller height on mobile */
+    }
+    .chat-input-area {
+        flex-direction: column; /* Stack input and button */
+    }
+    .btn {
+        width: 100%; /* Full width buttons */
+    }
+    .footer {
+        height: auto; /* Auto height on mobile */
+        padding: 10px 0;
+    }
+}

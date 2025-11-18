@@ -1,62 +1,52 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project Assistant - Blue Theme</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-</head>
-<body>
-    <header>
-        <div class="container header-content">
-            <h1><i class="fas fa-robot"></i> Project Assistant</h1>
-            <nav>
-                <a href="#chatbot-section"><i class="fas fa-comments"></i> Chatbot</a>
-                <a href="#report-section"><i class="fas fa-bug"></i> Report Issue</a>
-            </nav>
-        </div>
-    </header>
+{% extends "base.html" %}
 
-    <main class="container">
-        <section id="chatbot-section" class="card">
-            <h2><i class="fas fa-robot"></i> Chat with our Assistant</h2>
-            <div class="chat-window" id="chat-window">
-                <div class="message bot-message">
-                    <p>Hello! I'm your Project Assistant. How can I help you today?</p>
-                    <span class="timestamp" id="initial-bot-timestamp"></span>
+{% block content %}
+    <div class="p-5 mb-4 bg-light rounded-3 text-center hero-section">
+        <div class="container-fluid py-5">
+            <h1 class="display-3 fw-bold text-primary">{{ shop_name }}</h1>
+            <p class="col-md-8 fs-4 mx-auto text-muted">Your one-stop shop for quality products and exceptional service.</p>
+            <a class="btn btn-primary btn-lg mt-3" href="{{ url_for('products') }}" role="button"><i class="bi bi-cart-fill me-2"></i> Start Shopping Now!</a>
+        </div>
+    </div>
+
+    {% if featured_products %}
+    <h2 class="text-center mb-4 text-secondary">Featured Products</h2>
+    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
+        {% for product in featured_products %}
+        <div class="col">
+            <div class="card h-100 shadow-sm">
+                <img src="{{ product.image_url }}" class="card-img-top" alt="{{ product.name }}">
+                <div class="card-body d-flex flex-column">
+                    <h5 class="card-title">{{ product.name }}</h5>
+                    <p class="card-text text-muted flex-grow-1">{{ product.description | truncate(100) }}</p>
+                    <p class="card-text fw-bold fs-4 text-success">${{ "%.2f" | format(product.price) }}</p>
+                    <div class="d-grid gap-2 mt-auto">
+                        <a href="{{ url_for('product_detail', product_id=product.id) }}" class="btn btn-primary">View Details</a>
+                        <form action="{{ url_for('add_to_cart', product_id=product.id) }}" method="POST">
+                            <input type="hidden" name="quantity" value="1">
+                            <button type="submit" class="btn btn-outline-success w-100" {% if product.stock == 0 %}disabled{% endif %}>
+                                <i class="bi bi-cart-plus"></i> Add to Cart {% if product.stock == 0 %}(Out of Stock){% endif %}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+                <div class="card-footer text-muted">
+                    Stock: {{ product.stock }}
                 </div>
             </div>
-            <div class="chat-input-area">
-                <input type="text" id="user-message" placeholder="Type your message...">
-                <button id="send-button" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Send</button>
-            </div>
-        </section>
-
-        <section id="report-section" class="card">
-            <h2><i class="fas fa-bug"></i> Report an Issue</h2>
-            <form id="report-form">
-                <div class="form-group">
-                    <label for="report-subject">Subject</label>
-                    <input type="text" id="report-subject" name="subject" required placeholder="Brief summary of the issue">
-                </div>
-                <div class="form-group">
-                    <label for="report-description">Description</label>
-                    <textarea id="report-description" name="description" rows="5" required placeholder="Detailed description of the issue..."></textarea>
-                </div>
-                <button type="submit" class="btn btn-secondary"><i class="fas fa-upload"></i> Submit Report</button>
-                <div id="report-status" class="status-message"></div>
-            </form>
-        </section>
-    </main>
-
-    <footer>
-        <div class="container">
-            <p>&copy; 2023 Project Assistant. All rights reserved.</p>
         </div>
-    </footer>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="alert alert-info text-center" role="alert">
+        No featured products available at the moment.
+    </div>
+    {% endif %}
 
-    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
-</body>
-</html>
+    <div class="text-center mt-5">
+        <h2 class="text-secondary mb-3">Why Shop With {{ shop_name }}?</h2>
+        <p class="lead">We offer high-quality products, fast shipping, and excellent customer support.</p>
+        <p><a href="{{ url_for('contact') }}" class="btn btn-outline-info btn-lg"><i class="bi bi-question-circle me-2"></i> Have Questions? Contact Us!</a></p>
+    </div>
+
+{% endblock %}
