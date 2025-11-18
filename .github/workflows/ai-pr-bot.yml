@@ -87,15 +87,23 @@ jobs:
           Repository Chunks:
           {CHUNK_TEXT}
 
-          Return ONLY JSON:
+          CRITICAL INSTRUCTIONS:
+          1. Return ONLY raw JSON with NO markdown fences, NO code blocks, NO commentary
+          2. Do NOT use null for "content" - use empty string "" or add "skip": true
+          3. All file content must be complete strings, not null
+          4. Your entire response must be ONLY the JSON object below
+
+          Required JSON schema:
           {{
             "changes": [
               {{
-                "path": "relative/path",
-                "content": "new file content"
+                "path": "relative/path/to/file",
+                "content": "complete file content as string"
               }}
             ]
           }}
+
+          If no changes needed, return: {{"changes": []}}
           """
 
           # STEP 4 — CALL GEMINI API
@@ -110,7 +118,7 @@ jobs:
           except:
               raise SystemExit("❌ Invalid Gemini response")
 
-          # Strip JSON fences
+          # Strip JSON fences and whitespace
           clean = text_output.strip()
           if clean.startswith("```json"):
               clean = clean[7:].strip()
@@ -121,7 +129,8 @@ jobs:
 
           try:
               data = json.loads(clean)
-          except Exception:
+          except Exception as e:
+              print(f"❌ JSON Parse Error: {e}")
               raise SystemExit("❌ Gemini did not return valid JSON:\n" + clean[:1200])
 
           if "changes" not in data:
@@ -129,9 +138,19 @@ jobs:
 
           # APPLY CHANGES
           for c in data["changes"]:
+              # Skip files marked with skip flag
+              if c.get("skip"):
+                  print(f"⏭ Skipped: {c.get('path', 'unknown')}")
+                  continue
+              
               path = c["path"].lstrip("./")
-              content = c["content"]
-
+              content = c.get("content")
+              
+              # Validate content is not null
+              if content is None:
+                  print(f"⚠ Warning: Skipping {path} - content is null")
+                  continue
+              
               # Create directory only if path contains a directory component
               dir_name = os.path.dirname(path)
               if dir_name:
