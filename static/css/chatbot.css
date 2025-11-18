@@ -1,0 +1,209 @@
+/* static/css/chatbot.css - Specific styles for the chatbot page */
+
+/* --- Variables for a consistent blue theme (for chatbot components) --- */
+:root {
+    --primary-blue: #3498db;     /* Main interactive blue */
+    --secondary-blue: #2980b9;   /* Darker blue for accents/hover */
+    --accent-blue: #87ceeb;      /* Sky blue for highlights */
+    --light-bg-chatbot: #ecf0f1; /* Light grey for chatbot background */
+    --dark-text-chatbot: #2c3e50;/* Dark blue-grey for chatbot text */
+    --light-text-chatbot: #f0f6fa;/* Off-white for text on dark backgrounds */
+    --card-bg-chatbot: #ffffff;  /* White for chatbot card backgrounds */
+    --border-color-chatbot: #ddd;/* Light grey for chatbot borders */
+    --success-color-chatbot: #27ae60;/* Green for success messages */
+    --error-color-chatbot: #c0392b;  /* Red for error messages */
+    --shadow-light-chatbot: rgba(0, 0, 0, 0.1);   /* Light shadow for depth */
+    --shadow-medium-chatbot: rgba(0, 0, 0, 0.15); /* Medium shadow for cards */
+}
+
+/* General card styling for chatbot sections */
+.chatbot-card.card {
+    background-color: var(--card-bg-chatbot);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px var(--shadow-medium-chatbot);
+    padding: 30px;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    border-top: 5px solid var(--primary-blue); /* Decorative top border */
+    color: var(--dark-text-chatbot);
+}
+
+.chatbot-card.card:hover {
+    transform: translateY(-5px); /* Subtle lift effect on hover */
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2); /* Enhanced shadow on hover */
+}
+
+.chatbot-card .card-title {
+    color: var(--secondary-blue);
+    margin-top: 0;
+    margin-bottom: 25px;
+    font-size: 1.8em;
+    display: flex;
+    align-items: center;
+}
+
+.chatbot-card .card-title .fas {
+    margin-right: 10px;
+    color: var(--primary-blue);
+}
+
+/* --- Chatbot Section Styles --- */
+.chat-window {
+    height: 400px;
+    border: 1px solid var(--border-color-chatbot);
+    border-radius: 8px;
+    padding: 15px;
+    overflow-y: auto; /* Scroll for long conversations */
+    margin-bottom: 20px;
+    background-color: var(--light-bg-chatbot);
+    display: flex;
+    flex-direction: column;
+}
+
+.message {
+    max-width: 80%;
+    padding: 10px 15px;
+    border-radius: 20px;
+    margin-bottom: 10px;
+    position: relative;
+    word-wrap: break-word; /* Prevents overflow for long words */
+    font-size: 0.95em;
+}
+
+.user-message {
+    background-color: var(--primary-blue);
+    color: var(--light-text-chatbot);
+    align-self: flex-end; /* Aligns user messages to the right */
+    border-bottom-right-radius: 5px; /* Aesthetic touch */
+}
+
+.bot-message {
+    background-color: var(--secondary-blue);
+    color: var(--light-text-chatbot);
+    align-self: flex-start; /* Aligns bot messages to the left */
+    border-bottom-left-radius: 5px; /* Aesthetic touch */
+}
+
+.message p {
+    margin: 0;
+}
+
+.message .timestamp {
+    display: block;
+    font-size: 0.75em;
+    color: rgba(255, 255, 255, 0.7); /* Lighter timestamp for readability */
+    margin-top: 5px;
+    text-align: right;
+}
+
+.bot-message .timestamp {
+    text-align: left;
+}
+
+.chat-input-area {
+    display: flex;
+    gap: 10px;
+}
+
+#user-message {
+    flex-grow: 1;
+    padding: 12px 15px;
+    border: 1px solid var(--border-color-chatbot);
+    border-radius: 25px;
+    font-size: 1em;
+    transition: border-color 0.3s ease;
+}
+
+#user-message:focus {
+    outline: none;
+    border-color: var(--primary-blue);
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.3); /* Focus ring */
+}
+
+/* --- Button Base Styles (for chatbot page) --- */
+.btn {
+    /* Inherit from Bootstrap's .btn, customize primary/secondary for chatbot theme */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.btn .fas {
+    margin-right: 8px;
+}
+
+.btn-primary {
+    background-color: var(--primary-blue);
+    color: var(--light-text-chatbot);
+}
+
+.btn-primary:hover {
+    background-color: var(--secondary-blue);
+}
+
+/* --- Report Section Styles --- */
+.form-group label {
+    font-weight: 700;
+    color: var(--dark-text-chatbot);
+}
+
+.form-group input[type="text"],
+.form-group textarea {
+    border: 1px solid var(--border-color-chatbot);
+    border-radius: 8px;
+    font-size: 1em;
+    box-sizing: border-box; /* Crucial for consistent width */
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.form-group input[type="text"]:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: var(--primary-blue);
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.3);
+}
+
+.form-group textarea {
+    resize: vertical; /* Allows vertical resizing only */
+    min-height: 100px;
+}
+
+.btn-secondary {
+    background-color: var(--secondary-blue);
+    color: var(--light-text-chatbot);
+}
+
+.btn-secondary:hover {
+    background-color: var(--primary-blue);
+}
+
+.status-message {
+    margin-top: 15px;
+    padding: 10px 15px;
+    border-radius: 5px;
+    font-weight: 700;
+    display: none; /* Hidden by default, shown via JS */
+    text-align: center;
+}
+
+.status-message.success {
+    background-color: var(--success-color-chatbot);
+    color: var(--light-text-chatbot);
+}
+
+.status-message.error {
+    background-color: var(--error-color-chatbot);
+    color: var(--light-text-chatbot);
+}
+
+/* --- Responsive Adjustments --- */
+@media (max-width: 767px) {
+    .chat-window {
+        height: 300px; /* Smaller height on mobile */
+    }
+    .chat-input-area {
+        flex-direction: column; /* Stack input and button */
+    }
+    .btn {
+        width: 100%; /* Full width buttons */
+    }
+}

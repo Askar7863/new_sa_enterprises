@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block head %}
+    {{ super() }} <!-- Keep parent block's content -->
+    <title>Company Chatbot - SA Enterprises</title>
+    <!-- Specific CSS for chatbot page, overriding or supplementing base.css -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/chatbot.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+    <!-- Font Awesome is already in base.html now -->
+{% endblock %}
+
+{% block content %}
+    <div class="container mt-4 mb-5">
+        <section id="chatbot-section" class="chatbot-card card">
+            <h2 class="card-title"><i class="fas fa-robot"></i> Chat with our Assistant</h2>
+            <div class="chat-window" id="chat-window">
+                <div class="message bot-message">
+                    <p>Hello! I'm your Company Assistant for SA Enterprises. How can I help you today?</p>
+                    <span class="timestamp" id="initial-bot-timestamp"></span>
+                </div>
+            </div>
+            <div class="chat-input-area">
+                <input type="text" id="user-message" placeholder="Type your message...">
+                <button id="send-button" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Send</button>
+            </div>
+        </section>
+
+        <section id="report-section" class="chatbot-card card mt-4">
+            <h2 class="card-title"><i class="fas fa-bug"></i> Report an Issue</h2>
+            <form id="report-form">
+                <div class="form-group mb-3">
+                    <label for="report-subject" class="form-label">Subject</label>
+                    <input type="text" id="report-subject" name="subject" required placeholder="Brief summary of the issue" class="form-control">
+                </div>
+                <div class="form-group mb-3">
+                    <label for="report-description" class="form-label">Description</label>
+                    <textarea id="report-description" name="description" rows="5" required placeholder="Detailed description of the issue..." class="form-control"></textarea>
+                </div>
+                <button type="submit" class="btn btn-secondary"><i class="fas fa-upload"></i> Submit Report</button>
+                <div id="report-status" class="status-message mt-3"></div>
+            </form>
+        </section>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    {{ super() }} <!-- Keep parent block's scripts -->
+    <!-- Specific JS for chatbot page -->
+    <script src="{{ url_for('static', filename='js/chatbot_script.js') }}"></script>
+{% endblock %}
