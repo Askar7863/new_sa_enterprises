@@ -1,3 +1,12 @@
+0s
+Run python3 <<'PY'
+  File "<stdin>", line 50
+    prompt = f\"\"\"You are an autonomous senior software engineer.
+               ^
+SyntaxError: unexpected character after line continuation character
+Error: Process completed with exit code 1
+
+fix this error in this
 name: Gemini Full Repo Auto Dev
 
 on:
@@ -13,171 +22,213 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ Checkout repository (fetch full history so we can create branches)
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: true
 
+      # 1.5 Configure git user so commits succeed
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
+      # 2️⃣ Set up Python
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.x"
 
+      # 3️⃣ Install dependencies
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install requests tiktoken
-
+      # 4️⃣ Run Gemini with full repo context (safe/robust Python wrapper)
       - name: Run Full-Repo Gemini Agent
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
-          python3 << 'PY'
-import os
-import json
-import requests
-
-API_KEY = os.getenv("GEMINI_API_KEY")
-ISSUE_TITLE = os.getenv("ISSUE_TITLE", "")
-ISSUE_BODY = os.getenv("ISSUE_BODY", "")
-
-# STEP 1 — READ REPO
-repo_files = []
-for root, _, files in os.walk("."):
-    if root.startswith("./.git"):
-        continue
-    for f in files:
-        if f.endswith((".pyc", ".dll", ".exe")):
-            continue
-        path = os.path.join(root, f)
-        try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as fp:
-                repo_files.append({
-                    "path": path.lstrip("./"),
-                    "content": fp.read()
-                })
-        except:
-            pass
-
-# STEP 2 — CHUNK REPO INTO 8K BLOCKS
-MAX_CHARS = 8000
-chunks = []
-current = ""
-
-for file in repo_files:
-    text = f"\nFILE: {file['path']}\nCONTENT:\n{file['content']}\n"
-    if len(current) + len(text) > MAX_CHARS:
-        chunks.append(current)
-        current = ""
-    current += text
-
-if current:
-    chunks.append(current)
-
-CHUNK_TEXT = ""
-for i, c in enumerate(chunks):
-    CHUNK_TEXT += f"[CHUNK {i+1}]\n{c}\n---\n"
-
-# STEP 3 — PROMPT
-prompt = (
-    "You are an autonomous senior engineer.\n"
-    "Modify the repository based on this issue.\n\n"
-    f"Issue Title:\n{ISSUE_TITLE}\n\n"
-    f"Issue Body:\n{ISSUE_BODY}\n\n"
-    f"Repository Chunks:\n{CHUNK_TEXT}\n\n"
-    "Return ONLY JSON in this structure:\n"
-    "{\n"
-    '  "changes": [\n'
-    '    {\n'
-    '      "path": "relative/path.ext",\n'
-    '      "content": "file content here"\n'
-    "    }\n"
-    "  ]\n"
-    "}\n"
-)
-
-# STEP 4 — CALL GEMINI
-if not API_KEY:
-    raise SystemExit("Missing GEMINI_API_KEY")
-
-url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-headers = {"Content-Type": "application/json"}
-payload = {
-    "contents": [
-        {"parts": [{"text": prompt}]}
-    ]
-}
-
-resp = requests.post(url, headers=headers, params={"key": API_KEY}, json=payload)
-
-if resp.status_code != 200:
-    raise SystemExit("Gemini Error: " + resp.text)
-
-data = resp.json()
-
-try:
-    text_output = data["candidates"][0]["content"]["parts"][0]["text"]
-except:
-    raise SystemExit("Invalid Gemini output: " + json.dumps(data)[:800])
-
-try:
-    parsed = json.loads(text_output)
-except:
-    raise SystemExit("Gemini did not return JSON:\n" + text_output)
-
-# STEP 5 — APPLY CHANGES
-for change in parsed.get("changes", []):
-    path = change.get("path")
-    content = change.get("content", "")
-    if not path:
-        continue
-    clean_path = path.lstrip("./")
-    directory = os.path.dirname(clean_path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    with open(clean_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    print("✔ Modified:", clean_path)
-
-PY
-
+          python3 <<'PY'
+          import os
+          import json
+          import requests
+          API_KEY = os.getenv("GEMINI_API_KEY")
+          ISSUE_TITLE = os.getenv("ISSUE_TITLE", "")
+          ISSUE_BODY = os.getenv("ISSUE_BODY", "")
+          # --------------------------------------
+          # STEP 1: Read full repository
+          # --------------------------------------
+          repo_files = []
+          for root, _, files in os.walk("."):
+              # skip .git directory entirely
+              if root.startswith("./.git") or "/.git" in root:
+                  continue
+              for f in files:
+                  # skip Git internals and compiled binaries heuristically
+                  if f.startswith(".git") or f.endswith((".pyc", ".so", ".dll", ".exe")):
+                      continue
+                  path = os.path.join(root, f)
+                  try:
+                      with open(path, "r", encoding="utf-8", errors="ignore") as fp:
+                          content = fp.read()
+                          repo_files.append({"path": path.lstrip("./"), "content": content})
+                  except Exception:
+                      # skip unreadable files
+                      continue
+          # --------------------------------------
+          # STEP 2: Chunk repository
+          # --------------------------------------
+          MAX_CHARS = 8000
+          chunks = []
+          current = ""
+          for file in repo_files:
+              text = f"\nFILE: {file['path']}\nCONTENT:\n{file['content']}\n"
+              if len(current) + len(text) > MAX_CHARS:
+                  chunks.append(current)
+                  current = ""
+              current += text
+          if current:
+              chunks.append(current)
+          # --------------------------------------
+          # STEP 3: Build Gemini prompt
+          # --------------------------------------
+          CHUNK_TEXT = "\n---\n".join([f"[CHUNK {i+1}]\n{c}" for i, c in enumerate(chunks)])
+          prompt = f\"\"\"You are an autonomous senior software engineer.
+          Analyze the ENTIRE repository and implement modifications.
+          Issue Title:
+          {ISSUE_TITLE}
+          Issue Description:
+          {ISSUE_BODY}
+          Repository Chunks:
+          {CHUNK_TEXT}
+          Return JSON ONLY:
+          {{
+            "changes": [
+              {{
+                "path": "relative/path/to/file.ext",
+                "content": "new file content"
+              }}
+            ]
+          }}
+          \"\"\"
+          # --------------------------------------
+          # STEP 4: Call Gemini API
+          # --------------------------------------
+          if not API_KEY:
+              raise SystemExit("GEMINI_API_KEY not provided")
+          url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+          headers = {"Content-Type": "application/json"}
+          payload = {
+              "contents": [
+                  {"parts": [{"text": prompt}]}
+              ],
+              # Keep the request small and set reasonable options if available (depends on API)
+          }
+          # Use query param key if provided (older clients) otherwise rely on default auth
+          params = {"key": API_KEY}
+          try:
+              resp = requests.post(url, headers=headers, params=params, json=payload, timeout=120)
+          except Exception as e:
+              raise SystemExit(f"Request to Gemini failed: {e}")
+          if resp.status_code != 200:
+              raise SystemExit(f"Gemini API returned status {resp.status_code}: {resp.text}")
+          try:
+              resp_json = resp.json()
+          except Exception:
+              raise SystemExit("Unable to decode Gemini response as JSON")
+          # Attempt to retrieve the model text output safely
+          text_output = None
+          # Try known response shapes
+          if isinstance(resp_json, dict):
+              if "candidates" in resp_json and resp_json["candidates"]:
+                  try:
+                      text_output = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                  except Exception:
+                      pass
+              if not text_output and "output" in resp_json:
+                  # other possible field names
+                  try:
+                      text_output = resp_json["output"][0]["content"][0]["text"]
+                  except Exception:
+                      pass
+          if not text_output:
+              # do not print API key, print limited debug
+              preview = json.dumps(resp_json)[:1000]
+              raise SystemExit("❌ Gemini returned invalid response. Preview: " + preview)
+          # --------------------------------------
+          # STEP 5: Parse JSON and apply changes
+          # --------------------------------------
+          try:
+              data = json.loads(text_output)
+          except Exception:
+              raise SystemExit("❌ Gemini returned NON-JSON:\n" + text_output[:2000])
+          if "changes" not in data or not isinstance(data["changes"], list):
+              raise SystemExit("❌ Parsed JSON has no 'changes' list")
+          for change in data["changes"]:
+              path = change.get("path")
+              content = change.get("content", "")
+              if not path:
+                  print("Skipping change with no path")
+                  continue
+              # Normalize path and ensure directory exists
+              clean_path = path.lstrip("./")
+              dirpath = os.path.dirname(clean_path)
+              if dirpath:
+                  os.makedirs(dirpath, exist_ok=True)
+              # Write the file using utf-8
+              with open(clean_path, "w", encoding="utf-8") as f:
+                  f.write(content)
+              print("✔ Modified:", clean_path)
+          PY
+      # 5️⃣ Commit changes (create branch, commit and push)
       - name: Commit changes and push branch
         env:
           ISSUE_TITLE: ${{ github.event.issue.title }}
         run: |
-          BRANCH=$(echo "${ISSUE_TITLE:-ai-update}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9._-]/-/g' | cut -c1-50)
-          [ -z "$BRANCH" ] && BRANCH="ai-update"
-
+          # create a sanitized branch name from the issue title
+          BRANCH=$(echo "${ISSUE_TITLE:-ai-update}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | tr ' ' '-' \
+            | sed 's/[^a-z0-9._-]/-/g' \
+            | sed 's/--*/-/g' \
+            | cut -c1-50)
+          # fallback
+          if [ -z "$BRANCH" ]; then
+            BRANCH="ai-update"
+          fi
           git checkout -b "$BRANCH"
           git add --all
-
           if git diff --cached --quiet; then
-            echo "No AI changes — skip PR"
+            echo "⚠️ No AI changes — skipping PR"
             exit 0
           fi
-
-          git commit -m "AI update for issue #${{ github.event.issue.number }}"
+          git commit -m "AI update for issue #${{ github.event.issue.number }}" || true
           git push --set-upstream origin "$BRANCH"
-
+      # 6️⃣ Create PR (use the REST API; include Content-Type and safer token usage)
       - name: Create PR
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          OWNER="${{ github.repository_owner }}"
-          REPO="${{ github.event.repository.name }}"
+          REPO_OWNER="${{ github.repository_owner }}"
+          REPO_NAME="${{ github.event.repository.name }}"
           BRANCH=$(git rev-parse --abbrev-ref HEAD)
-
+          # set base branch if different; default to main
+          BASE_BRANCH="main"
+          # Use a here-doc for JSON body to avoid quoting issues
           curl -s -X POST \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "Content-Type: application/json" \
-            "https://api.github.com/repos/$OWNER/$REPO/pulls" \
-            -d "{\"title\": \"AI PR: ${{ github.event.issue.title }}\", \"body\": \"Generated from Issue #${{ github.event.issue.number }}\", \"head\": \"$BRANCH\", \"base\": \"main\"}"
+            "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls" \
+            -d @- <<EOF
+          {
+            "title": "AI PR: ${{ github.event.issue.title }}",
+            "body": "Generated by Gemini Full Repo AI Agent\n\nSource: Issue #${{ github.event.issue.number }}",
+            "head": "$BRANCH",
+            "base": "$BASE_BRANCH"
+          }
+          EOF
