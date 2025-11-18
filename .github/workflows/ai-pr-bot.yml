@@ -76,7 +76,7 @@ jobs:
 
           # STEP 3 — PROMPT FOR GEMINI
           prompt = f"""
-          You are an autonomous senior engineer.
+          You are an autonomous senior engineer tasked with making code changes.
 
           Issue Title:
           {ISSUE_TITLE}
@@ -87,23 +87,32 @@ jobs:
           Repository Chunks:
           {CHUNK_TEXT}
 
-          CRITICAL INSTRUCTIONS:
-          1. Return ONLY raw JSON with NO markdown fences, NO code blocks, NO commentary
-          2. Do NOT use null for "content" - use empty string "" or add "skip": true
-          3. All file content must be complete strings, not null
-          4. Your entire response must be ONLY the JSON object below
+          CRITICAL JSON FORMAT REQUIREMENTS:
+          1. Return ONLY raw JSON - NO markdown fences (```), NO prose, NO comments
+          2. Your ENTIRE response must be ONLY valid JSON
+          3. Do NOT use null for "content" - always use a string (empty string "" is acceptable)
+          4. Ensure ALL commas, quotes, and brackets are properly placed
+          5. Escape special characters in strings (newlines as \\n, quotes as \\", etc.)
+          6. Test your JSON is valid before responding
 
-          Required JSON schema:
+          Required JSON schema (and NOTHING else):
           {{
             "changes": [
               {{
                 "path": "relative/path/to/file",
-                "content": "complete file content as string"
+                "content": "complete file content as properly escaped string"
               }}
             ]
           }}
 
+          Examples of CORRECT responses:
+          {{"changes": [{{"path": "test.txt", "content": "Hello World"}}]}}
+          {{"changes": [{{"path": "README.md", "content": "# Title\\n\\nContent here"}}]}}
+          {{"changes": []}}
+
           If no changes needed, return: {{"changes": []}}
+          
+          Remember: Your response must be parseable by json.loads() with no errors.
           """
 
           # STEP 4 — CALL GEMINI API
@@ -127,11 +136,21 @@ jobs:
           if clean.endswith("```"):
               clean = clean[:-3].strip()
 
-          try:
-              data = json.loads(clean)
-          except Exception as e:
-              print(f"❌ JSON Parse Error: {e}")
-              raise SystemExit("❌ Gemini did not return valid JSON:\n" + clean[:1200])
+          # Safe JSON parsing with detailed error reporting
+          def safe_parse_json(json_str):
+              try:
+                  return json.loads(json_str)
+              except json.JSONDecodeError as e:
+                  print(f"❌ JSON Parse Error: {e}")
+                  print(f"Error at line {e.lineno}, column {e.colno}, position {e.pos}")
+                  # Show context around the error
+                  start = max(e.pos - 100, 0)
+                  end = min(e.pos + 100, len(json_str))
+                  print(f"Context around error:\n...{json_str[start:end]}...")
+                  print(f"\nFull response (first 2000 chars):\n{json_str[:2000]}")
+                  raise SystemExit("❌ Gemini returned invalid JSON. Check logs above for details.")
+
+          data = safe_parse_json(clean)
 
           if "changes" not in data:
               raise SystemExit("❌ No 'changes' in response")
