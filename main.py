@@ -11,10 +11,10 @@ def main():
 email:abc@gmail.com
 number:00000000000
 make all files and modify existing also"""
-    print("TODO: Implement analyse the complete repository and change the project to a ecommerce website named SA enterpeises and also add attractive ui with reporting emails,contact info
+    print("""TODO: Implement analyse the complete repository and change the project to a ecommerce website named SA enterpeises and also add attractive ui with reporting emails,contact info
 email:abc@gmail.com
 number:00000000000
-make all files and modify existing also")
+make all files and modify existing also""")
     # Add your implementation here
     pass
 
